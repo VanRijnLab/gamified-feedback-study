@@ -1,6 +1,6 @@
 .PHONY: all clean data learn test survey
 
-all: data learn test survey
+all: learn test survey
 
 clean:
 	rm -rf output/* data/processed/*
