@@ -1,2 +1,1 @@
-# gamified-feedback-study
-Gamified Feedback in Adaptive Retrieval Practice
+# Gamified Feedback in Adaptive Retrieval Practice
