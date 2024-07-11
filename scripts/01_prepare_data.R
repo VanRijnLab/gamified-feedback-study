@@ -108,6 +108,7 @@ d_survey <- d_agg_full |>
     block = as.factor(Block),
     condition = condition_label,
     gamified = condition != "Control",
+    judgement_of_learning = PercentageVertalingen,
     motivation_enjoyment = Enjoyment,
     motivation_competence = Competence,
     motivation_value = Value,

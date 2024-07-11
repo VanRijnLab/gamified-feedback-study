@@ -59,18 +59,18 @@ Relevant variables: Feelings of competence, Enjoyment, task value, and task pref
 Prepare data
 
 ```{r}
-d_survey_agg <- d_survey %>%
-  group_by(block, condition, gamified, gamified_first, exp_group, category, question) %>%
+d_survey_agg <- d_survey |>
+  group_by(block, condition, gamified, gamified_first, exp_group, category, question) |>
   summarise(response_mean = mean(response, na.rm = T),
-            response_se = sd(response, na.rm = T)/sqrt(n())) %>%
-  ungroup() %>%
+            response_se = sd(response, na.rm = T)/sqrt(n())) |>
+  ungroup() |>
   add_experiment_cols() |>
   mutate(perception_label_sorted = factor(question, levels = c("goalsetting","performwell","goalstress","distraction","relevance")))
 ```
 
 Mean-centering categorical predictors for modelling:
 ```{r}
-d_survey_m <- d_survey %>%
+d_survey_m <- d_survey |>
   mutate(exp_group_c = ifelse(exp_group == "score", 0, 1),
          exp_group_c = exp_group_c - mean(exp_group_c),
          gamified_first_c = gamified_first - mean(gamified_first))
@@ -82,8 +82,8 @@ d_survey_m <- d_survey %>%
 ```{r}
 dodge_width <- .25
 
-p_motivation <- d_survey_agg %>%
-  filter(category == "motivation") %>%
+p_motivation <- d_survey_agg |>
+  filter(category == "motivation") |>
   ggplot(aes(x = block, y = response_mean, group = interaction(exp_order, question))) +
   facet_grid(~ question, labeller = labeller(question = str_to_title)) +
   geom_line(aes(lty = exp_order), position = position_dodge(width = dodge_width)) +
@@ -142,7 +142,8 @@ d_model_fit
 ```
 
 
-Visualise fitted model:
+### Visualise fitted model
+
 ```{r}
 p_competence_m <- plot_model_fit(m_competence, filter(d_survey_m, question == "competence"), y_lab = "Competence") +
   scale_y_continuous(limits = c(3, 6), labels = scales::comma_format())
@@ -211,7 +212,8 @@ d_model_fit$model_fit <- predict(m_enjoyment,
 d_model_fit
 ```
 
-### Visualise fitted model:
+### Visualise fitted model
+
 ```{r}
 p_enjoyment_m <- plot_model_fit(m_enjoyment, filter(d_survey_m, question == "enjoyment"), y_lab = "Enjoyment") +
   scale_y_continuous(limits = c(3, 6), labels = scales::comma_format())
@@ -299,7 +301,9 @@ d_model_fit$model_fit <- predict(m_value,
 
 d_model_fit
 ```
-### Visualise fitted model:
+
+### Visualise fitted model
+
 ```{r}
 p_value_m <- plot_model_fit(m_value, filter(d_survey_m, question == "value"), y_lab = "Value") +
   scale_y_continuous(limits = c(3, 6), labels = scales::comma_format())
@@ -325,9 +329,9 @@ Relevant variables: goal use and wanting to perform well.
 ```{r}
 dodge_width <- .25
 
-p_perception <- d_survey_agg %>%
-  filter(category == "perception") %>%
-  mutate(question_sorted = factor(question, levels = c("goalsetting","performwell","goalstress","distraction","relevance")))%>%
+p_perception <- d_survey_agg |>
+  filter(category == "perception") |>
+  mutate(question_sorted = factor(question, levels = c("goalsetting","performwell","goalstress","distraction","relevance")))|>
   ggplot(aes(x = block, y = response_mean, group = interaction(exp_order, question))) +
   facet_grid(~ perception_label_sorted, labeller = labeller(question = str_to_title)) +
   geom_line(aes(lty = exp_order), position = position_dodge(width = dodge_width)) +
@@ -435,7 +439,8 @@ d_model_fit
 ```
 
 
-### Visualise fitted model:
+### Visualise fitted model
+
 ```{r}
 p_goalsetting_m <- plot_model_fit(m_goalsetting, filter(d_survey_m, question == "goalsetting"), y_lab = "Goal use") +
   scale_y_continuous(limits = c(3, 6), labels = scales::comma_format())
@@ -530,7 +535,6 @@ d_model_fit
 
 ### Visualise fitted model
 
- fitted model:
 ```{r}
 p_performwell_m <- plot_model_fit(m_performwell, filter(d_survey_m, question == "performwell"), y_lab = "Wanting to perform well") +
   scale_y_continuous(limits = c(4, 7), labels = scales::comma_format())
@@ -596,7 +600,8 @@ d_model_fit$model_fit <- predict(m_goalstress,
 d_model_fit
 ```
 
-### Visualise fitted model:
+### Visualise fitted model
+
 ```{r}
 p_goalstress_m <- plot_model_fit(m_goalstress, filter(d_survey_m, question == "goalstress"), y_lab = "Goal stress") +
   scale_y_continuous(limits = c(3, 6), labels = scales::comma_format())
@@ -673,6 +678,15 @@ d_model_fit
 ```
 
 
+### Visualise fitted model
+
+```{r}
+p_distraction_m <- plot_model_fit(m_distraction, filter(d_survey_m, question == "distraction"), y_lab = "Distraction") +
+  scale_y_continuous(limits = c(1.5, 4.5), labels = scales::comma_format())
+
+p_distraction_m
+```
+
 ## Conclusion
 -	Gamified practice was rated as more stressful than the control condition
 -	The progress bar condition was rated as more stressful and more distracting than the points condition. (However, ratings were overall relatively low on the 7-point scale, with average values between 2.68 and 4.28). 
@@ -697,6 +711,7 @@ summary(m_relevance)
 ```
 
 ### Fitted values
+
 ```{r}
 d_model_fit <- crossing(
   exp_group_c = sort(unique(d_survey_m$exp_group_c)),
@@ -712,9 +727,10 @@ d_model_fit
 ```
 
 
+
 ## Preference for Condition
 ```{r}
-data_preferences <- d_survey %>% filter(preference!="" & condition != "Control") # Exclude two participants who did not respond to this item and keep only one row per participant
+data_preferences <- d_survey |> filter(preference!="" & condition != "Control") # Exclude two participants who did not respond to this item and keep only one row per participant
 CrossTable_preferences <-  table(data_preferences$exp_group, data_preferences$preference)
 CrossTable_preferences
 prop.table(CrossTable_preferences,1)
@@ -725,6 +741,116 @@ summary(table(data_preferences$exp_group, data_preferences$preference))
 ## Conclusions
 -	Progress bar condition was rated as more relevant than the points condition. 
 - However, participants in the progress bar group did not show a significantly stronger preference for gamified practice over the control condition than participants in the points group.
+
+
+# Does gamification change learners' metacognitive judgements?
+
+Relevant variable: judgement of learning.
+
+## Judgement of learning
+Participants were asked to give the percentage of practiced translations they thought they would still know in two days.
+
+```{r}
+d_jol_agg <- d_survey |>
+  group_by(subject, block, condition, gamified, gamified_first, exp_group) |>
+  summarise(judgement_of_learning = judgement_of_learning[1]/100) |>
+  group_by(block, condition, gamified, gamified_first, exp_group) |>
+  summarise(jol_mean = mean(judgement_of_learning, na.rm = T),
+            jol_se = sd(judgement_of_learning, na.rm = T)/sqrt(n())) |>
+  ungroup() |>
+  add_experiment_cols()
+
+
+dodge_width <- .25
+
+p_jol <- ggplot(d_jol_agg, aes(x = block, y = jol_mean, group = exp_order)) +
+  geom_line(aes(lty = exp_order), position = position_dodge(width = dodge_width)) +
+  geom_errorbar(aes(ymin = jol_mean - jol_se, ymax = jol_mean + jol_se, colour = condition),
+                width = 0,
+                alpha = .5,
+                position = position_dodge(width = dodge_width)) +
+  geom_point(aes(colour = condition, pch = condition),
+             size = 2,
+             position = position_dodge(width = dodge_width)) +
+  scale_colour_manual(values = col_condition) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  guides(lty = "none") +
+  labs(x = "Block",
+       y = "Judgement of learning",
+       colour = "Condition",
+       pch = "Condition") +
+  theme_paper
+
+p_jol
+ggsave(p_jol, filename = here("output", "survey_judgementoflearning.png"), width = 8, height = 3)
+```
+
+### Fit model
+
+```{r}
+d_jol_m <- d_survey_m |>
+  group_by(subject, gamified, block, condition, gamified_first, exp_group, gamified_first_c, exp_group_c) |>
+  summarise(judgement_of_learning = judgement_of_learning[1]/100) |>
+  ungroup()
+
+
+m_jol <- lmer(judgement_of_learning ~ gamified +
+                gamified:exp_group_c +
+                gamified:gamified_first_c +
+                gamified:gamified_first_c:exp_group_c +
+                (1 | subject),
+              data = d_jol_m)
+
+summary(m_jol)
+print_model_table(m_jol)
+```
+
+### Fitted values
+Gamified versus control:
+```{r}
+d_model_fit <- crossing(
+  gamified = sort(unique(d_jol_m$gamified)), 
+  exp_group_c = 0,
+  gamified_first_c = 0
+)
+
+d_model_fit$model_fit <- predict(m_jol,
+                                 newdata = d_model_fit,
+                                 re.form = NA, 
+                                 type = "response")
+
+d_model_fit
+```
+
+
+Points group versus progress bar group:
+```{r}
+d_model_fit <- crossing(
+  gamified = TRUE, 
+  exp_group_c = sort(unique(d_jol_m$exp_group_c)),
+  gamified_first_c = 0
+)
+
+d_model_fit$model_fit <- predict(m_jol,
+                                 newdata = d_model_fit,
+                                 re.form = NA, 
+                                 type = "response")
+
+d_model_fit
+```
+
+### Visualise fitted model
+```{r}
+p_jol_m <- plot_model_fit(m_jol, d_jol_m, y_lab = "Judgement of learning") |
+    scale_y_continuous(limits = c(.25, .45), labels = scales::percent_format())
+
+p_jol_m
+```
+
+## Conclusion
+
+-	Judgements of learning were higher in the gamified conditions than in the control condition, but not significantly different between the points and progress bar condition.
+
 
 # Session info
 ```{r}

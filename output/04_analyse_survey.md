@@ -10,14 +10,15 @@ Last updated: 2024-07-11
   - [Competence](#competence)
     - [Fit model](#fit-model)
     - [Fitted values](#fitted-values)
+    - [Visualise fitted model](#visualise-fitted-model)
   - [Enjoyment](#enjoyment)
     - [Fit model](#fit-model-1)
     - [Fitted values](#fitted-values-1)
-    - [Visualise fitted model:](#visualise-fitted-model)
+    - [Visualise fitted model](#visualise-fitted-model-1)
   - [Perceived Task Value](#perceived-task-value)
     - [Fit model](#fit-model-2)
     - [Fitted values](#fitted-values-2)
-    - [Visualise fitted model:](#visualise-fitted-model-1)
+    - [Visualise fitted model](#visualise-fitted-model-2)
   - [Conclusion](#conclusion)
 - [Does gamification change goal setting
   behavior?](#does-gamification-change-goal-setting-behavior)
@@ -25,19 +26,20 @@ Last updated: 2024-07-11
   - [Goalsetting](#goalsetting)
     - [Fit model](#fit-model-3)
     - [Fitted values](#fitted-values-3)
-    - [Visualise fitted model:](#visualise-fitted-model-2)
+    - [Visualise fitted model](#visualise-fitted-model-3)
   - [Wanting to perform well](#wanting-to-perform-well)
     - [Fit model](#fit-model-4)
     - [Fitted values](#fitted-values-4)
-    - [Visualise fitted model](#visualise-fitted-model-3)
+    - [Visualise fitted model](#visualise-fitted-model-4)
   - [Conclusion](#conclusion-1)
 - [Are there negative effects of gamified feedback on learners’
   experience?](#are-there-negative-effects-of-gamified-feedback-on-learners-experience)
   - [Stress](#stress)
     - [Fitted values](#fitted-values-5)
-    - [Visualise fitted model:](#visualise-fitted-model-4)
+    - [Visualise fitted model](#visualise-fitted-model-5)
   - [Distraction](#distraction)
     - [Fitted values](#fitted-values-6)
+    - [Visualise fitted model](#visualise-fitted-model-6)
   - [Conclusion](#conclusion-2)
 - [Which Condition do Learners
   prefer?](#which-condition-do-learners-prefer)
@@ -45,6 +47,13 @@ Last updated: 2024-07-11
     - [Fitted values](#fitted-values-7)
   - [Preference for Condition](#preference-for-condition)
   - [Conclusions](#conclusions)
+- [Does gamification change learners’ metacognitive
+  judgements?](#does-gamification-change-learners-metacognitive-judgements)
+  - [Judgement of learning](#judgement-of-learning)
+    - [Fit model](#fit-model-5)
+    - [Fitted values](#fitted-values-8)
+    - [Visualise fitted model](#visualise-fitted-model-7)
+  - [Conclusion](#conclusion-3)
 - [Session info](#session-info)
 
 # Setup
@@ -94,11 +103,11 @@ task preference.
 Prepare data
 
 ``` r
-d_survey_agg <- d_survey %>%
-  group_by(block, condition, gamified, gamified_first, exp_group, category, question) %>%
+d_survey_agg <- d_survey |>
+  group_by(block, condition, gamified, gamified_first, exp_group, category, question) |>
   summarise(response_mean = mean(response, na.rm = T),
-            response_se = sd(response, na.rm = T)/sqrt(n())) %>%
-  ungroup() %>%
+            response_se = sd(response, na.rm = T)/sqrt(n())) |>
+  ungroup() |>
   add_experiment_cols() |>
   mutate(perception_label_sorted = factor(question, levels = c("goalsetting","performwell","goalstress","distraction","relevance")))
 ```
@@ -110,7 +119,7 @@ d_survey_agg <- d_survey %>%
 Mean-centering categorical predictors for modelling:
 
 ``` r
-d_survey_m <- d_survey %>%
+d_survey_m <- d_survey |>
   mutate(exp_group_c = ifelse(exp_group == "score", 0, 1),
          exp_group_c = exp_group_c - mean(exp_group_c),
          gamified_first_c = gamified_first - mean(gamified_first))
@@ -121,8 +130,8 @@ d_survey_m <- d_survey %>%
 ``` r
 dodge_width <- .25
 
-p_motivation <- d_survey_agg %>%
-  filter(category == "motivation") %>%
+p_motivation <- d_survey_agg |>
+  filter(category == "motivation") |>
   ggplot(aes(x = block, y = response_mean, group = interaction(exp_order, question))) +
   facet_grid(~ question, labeller = labeller(question = str_to_title)) +
   geom_line(aes(lty = exp_order), position = position_dodge(width = dodge_width)) +
@@ -254,7 +263,7 @@ d_model_fit
     ## 1 FALSE              0                0      3.95
     ## 2 TRUE               0                0      4.41
 
-Visualise fitted model:
+### Visualise fitted model
 
 ``` r
 p_competence_m <- plot_model_fit(m_competence, filter(d_survey_m, question == "competence"), y_lab = "Competence") +
@@ -436,7 +445,7 @@ d_model_fit
     ## 3 FALSE          0.524           -0.542      4.91
     ## 4 FALSE          0.524            0.458      3.84
 
-### Visualise fitted model:
+### Visualise fitted model
 
 ``` r
 p_enjoyment_m <- plot_model_fit(m_enjoyment, filter(d_survey_m, question == "enjoyment"), y_lab = "Enjoyment") +
@@ -648,7 +657,7 @@ d_model_fit
     ## 3 FALSE          0.524           -0.542      5.83
     ## 4 FALSE          0.524            0.458      4.69
 
-### Visualise fitted model:
+### Visualise fitted model
 
 ``` r
 p_value_m <- plot_model_fit(m_value, filter(d_survey_m, question == "value"), y_lab = "Value") +
@@ -706,9 +715,9 @@ Relevant variables: goal use and wanting to perform well.
 ``` r
 dodge_width <- .25
 
-p_perception <- d_survey_agg %>%
-  filter(category == "perception") %>%
-  mutate(question_sorted = factor(question, levels = c("goalsetting","performwell","goalstress","distraction","relevance")))%>%
+p_perception <- d_survey_agg |>
+  filter(category == "perception") |>
+  mutate(question_sorted = factor(question, levels = c("goalsetting","performwell","goalstress","distraction","relevance")))|>
   ggplot(aes(x = block, y = response_mean, group = interaction(exp_order, question))) +
   facet_grid(~ perception_label_sorted, labeller = labeller(question = str_to_title)) +
   geom_line(aes(lty = exp_order), position = position_dodge(width = dodge_width)) +
@@ -929,7 +938,7 @@ d_model_fit
     ## 1 FALSE         -0.476                0      4.61
     ## 2 FALSE          0.524                0      4.05
 
-### Visualise fitted model:
+### Visualise fitted model
 
 ``` r
 p_goalsetting_m <- plot_model_fit(m_goalsetting, filter(d_survey_m, question == "goalsetting"), y_lab = "Goal use") +
@@ -1140,8 +1149,6 @@ d_model_fit
 
 ### Visualise fitted model
 
-fitted model:
-
 ``` r
 p_performwell_m <- plot_model_fit(m_performwell, filter(d_survey_m, question == "performwell"), y_lab = "Wanting to perform well") +
   scale_y_continuous(limits = c(4, 7), labels = scales::comma_format())
@@ -1317,7 +1324,7 @@ d_model_fit
     ## 1 TRUE          -0.476                0      3.66
     ## 2 TRUE           0.524                0      4.28
 
-### Visualise fitted model:
+### Visualise fitted model
 
 ``` r
 p_goalstress_m <- plot_model_fit(m_goalstress, filter(d_survey_m, question == "goalstress"), y_lab = "Goal stress") +
@@ -1501,6 +1508,41 @@ d_model_fit
     ## 1 TRUE               0           -0.542      3.45
     ## 2 TRUE               0            0.458      2.53
 
+### Visualise fitted model
+
+``` r
+p_distraction_m <- plot_model_fit(m_distraction, filter(d_survey_m, question == "distraction"), y_lab = "Distraction") +
+  scale_y_continuous(limits = c(1.5, 4.5), labels = scales::comma_format())
+```
+
+    ##   block    condition gamified gamified_first exp_group gamified_first_c
+    ## 1     1      Control    FALSE          FALSE      both       -0.5421687
+    ## 2     1      Control    FALSE          FALSE     score       -0.5421687
+    ## 3     1       Points     TRUE           TRUE     score        0.4578313
+    ## 4     1 Progress bar     TRUE           TRUE      both        0.4578313
+    ## 5     2      Control    FALSE           TRUE      both        0.4578313
+    ## 6     2      Control    FALSE           TRUE     score        0.4578313
+    ## 7     2       Points     TRUE          FALSE     score       -0.5421687
+    ## 8     2 Progress bar     TRUE          FALSE      both       -0.5421687
+    ##   exp_group_c pred_val     exp_order     type
+    ## 1   0.5240964 3.805556  Control—Both  Control
+    ## 2  -0.4759036 2.900000 Control—Score  Control
+    ## 3  -0.4759036 2.297872 Score—Control Gamified
+    ## 4   0.5240964 2.790698  Both—Control Gamified
+    ## 5   0.5240964 2.767442  Both—Control  Control
+    ## 6  -0.4759036 2.489362 Score—Control  Control
+    ## 7  -0.4759036 3.125000 Control—Score Gamified
+    ## 8   0.5240964 3.805556  Control—Both Gamified
+
+    ## Scale for y is already present.
+    ## Adding another scale for y, which will replace the existing scale.
+
+``` r
+p_distraction_m
+```
+
+![](04_analyse_survey_files/figure-gfm/unnamed-chunk-43-1.png)<!-- -->
+
 ## Conclusion
 
 - Gamified practice was rated as more stressful than the control
@@ -1581,7 +1623,7 @@ d_model_fit
 ## Preference for Condition
 
 ``` r
-data_preferences <- d_survey %>% filter(preference!="" & condition != "Control") # Exclude two participants who did not respond to this item and keep only one row per participant
+data_preferences <- d_survey |> filter(preference!="" & condition != "Control") # Exclude two participants who did not respond to this item and keep only one row per participant
 CrossTable_preferences <-  table(data_preferences$exp_group, data_preferences$preference)
 CrossTable_preferences
 ```
@@ -1616,6 +1658,237 @@ summary(table(data_preferences$exp_group, data_preferences$preference))
 - However, participants in the progress bar group did not show a
   significantly stronger preference for gamified practice over the
   control condition than participants in the points group.
+
+# Does gamification change learners’ metacognitive judgements?
+
+Relevant variable: judgement of learning.
+
+## Judgement of learning
+
+Participants were asked to give the percentage of practiced translations
+they thought they would still know in two days.
+
+``` r
+d_jol_agg <- d_survey |>
+  group_by(subject, block, condition, gamified, gamified_first, exp_group) |>
+  summarise(judgement_of_learning = judgement_of_learning[1]/100) |>
+  group_by(block, condition, gamified, gamified_first, exp_group) |>
+  summarise(jol_mean = mean(judgement_of_learning, na.rm = T),
+            jol_se = sd(judgement_of_learning, na.rm = T)/sqrt(n())) |>
+  ungroup() |>
+  add_experiment_cols()
+```
+
+    ## `summarise()` has grouped output by 'subject', 'block', 'condition', 'gamified', 'gamified_first'. You can override using the `.groups` argument.
+    ## `summarise()` has grouped output by 'block', 'condition', 'gamified', 'gamified_first'. You can override using the `.groups` argument.
+
+``` r
+dodge_width <- .25
+
+p_jol <- ggplot(d_jol_agg, aes(x = block, y = jol_mean, group = exp_order)) +
+  geom_line(aes(lty = exp_order), position = position_dodge(width = dodge_width)) +
+  geom_errorbar(aes(ymin = jol_mean - jol_se, ymax = jol_mean + jol_se, colour = condition),
+                width = 0,
+                alpha = .5,
+                position = position_dodge(width = dodge_width)) +
+  geom_point(aes(colour = condition, pch = condition),
+             size = 2,
+             position = position_dodge(width = dodge_width)) +
+  scale_colour_manual(values = col_condition) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  guides(lty = "none") +
+  labs(x = "Block",
+       y = "Judgement of learning",
+       colour = "Condition",
+       pch = "Condition") +
+  theme_paper
+
+p_jol
+```
+
+![](04_analyse_survey_files/figure-gfm/unnamed-chunk-47-1.png)<!-- -->
+
+``` r
+ggsave(p_jol, filename = here("output", "survey_judgementoflearning.png"), width = 8, height = 3)
+```
+
+### Fit model
+
+``` r
+d_jol_m <- d_survey_m |>
+  group_by(subject, gamified, block, condition, gamified_first, exp_group, gamified_first_c, exp_group_c) |>
+  summarise(judgement_of_learning = judgement_of_learning[1]/100) |>
+  ungroup()
+```
+
+    ## `summarise()` has grouped output by 'subject', 'gamified', 'block',
+    ## 'condition', 'gamified_first', 'exp_group', 'gamified_first_c'. You can
+    ## override using the `.groups` argument.
+
+``` r
+m_jol <- lmer(judgement_of_learning ~ gamified +
+                gamified:exp_group_c +
+                gamified:gamified_first_c +
+                gamified:gamified_first_c:exp_group_c +
+                (1 | subject),
+              data = d_jol_m)
+
+summary(m_jol)
+```
+
+    ## Linear mixed model fit by REML. t-tests use Satterthwaite's method [
+    ## lmerModLmerTest]
+    ## Formula: 
+    ## judgement_of_learning ~ gamified + gamified:exp_group_c + gamified:gamified_first_c +  
+    ##     gamified:gamified_first_c:exp_group_c + (1 | subject)
+    ##    Data: d_jol_m
+    ## 
+    ## REML criterion at convergence: -287.3
+    ## 
+    ## Scaled residuals: 
+    ##     Min      1Q  Median      3Q     Max 
+    ## -3.6291 -0.4202 -0.0289  0.4106  3.4697 
+    ## 
+    ## Random effects:
+    ##  Groups   Name        Variance Std.Dev.
+    ##  subject  (Intercept) 0.02623  0.1620  
+    ##  Residual             0.00801  0.0895  
+    ## Number of obs: 332, groups:  subject, 166
+    ## 
+    ## Fixed effects:
+    ##                                              Estimate Std. Error         df
+    ## (Intercept)                                  0.345647   0.014362 204.178850
+    ## gamifiedTRUE                                 0.020967   0.009824 162.000003
+    ## gamifiedFALSE:exp_group_c                   -0.054810   0.028757 204.178850
+    ## gamifiedTRUE:exp_group_c                    -0.035268   0.028757 204.178850
+    ## gamifiedFALSE:gamified_first_c              -0.048299   0.028826 204.178850
+    ## gamifiedTRUE:gamified_first_c               -0.019907   0.028826 204.178850
+    ## gamifiedFALSE:exp_group_c:gamified_first_c   0.015823   0.057721 204.178850
+    ## gamifiedTRUE:exp_group_c:gamified_first_c    0.012826   0.057721 204.178850
+    ##                                            t value Pr(>|t|)    
+    ## (Intercept)                                 24.067   <2e-16 ***
+    ## gamifiedTRUE                                 2.134   0.0343 *  
+    ## gamifiedFALSE:exp_group_c                   -1.906   0.0581 .  
+    ## gamifiedTRUE:exp_group_c                    -1.226   0.2214    
+    ## gamifiedFALSE:gamified_first_c              -1.676   0.0954 .  
+    ## gamifiedTRUE:gamified_first_c               -0.691   0.4906    
+    ## gamifiedFALSE:exp_group_c:gamified_first_c   0.274   0.7843    
+    ## gamifiedTRUE:exp_group_c:gamified_first_c    0.222   0.8244    
+    ## ---
+    ## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+    ## 
+    ## Correlation of Fixed Effects:
+    ##               (Intr) gmTRUE gmfdFALSE:x__ gmfdTRUE:x__ gmfdFALSE:g__
+    ## gamifidTRUE   -0.342                                                
+    ## gmfdFALSE:x__  0.000  0.000                                         
+    ## gmfdTRUE:x__   0.000  0.000  0.766                                  
+    ## gmfdFALSE:g__  0.000  0.000 -0.004        -0.003                    
+    ## gmfdTRUE:g__   0.000  0.000 -0.003        -0.004        0.766       
+    ## gFALSE:__:_   -0.004  0.001  0.000         0.000        0.001       
+    ## gTRUE:__:__   -0.003 -0.001  0.000         0.000        0.001       
+    ##               gmfdTRUE:g__ gFALSE:__:
+    ## gamifidTRUE                          
+    ## gmfdFALSE:x__                        
+    ## gmfdTRUE:x__                         
+    ## gmfdFALSE:g__                        
+    ## gmfdTRUE:g__                         
+    ## gFALSE:__:_    0.001                 
+    ## gTRUE:__:__    0.001        0.766
+
+``` r
+print_model_table(m_jol)
+```
+
+<img src="04_analyse_survey_files/figure-gfm/unnamed-chunk-48-1.png" width="1733" />
+
+### Fitted values
+
+Gamified versus control:
+
+``` r
+d_model_fit <- crossing(
+  gamified = sort(unique(d_jol_m$gamified)), 
+  exp_group_c = 0,
+  gamified_first_c = 0
+)
+
+d_model_fit$model_fit <- predict(m_jol,
+                                 newdata = d_model_fit,
+                                 re.form = NA, 
+                                 type = "response")
+
+d_model_fit
+```
+
+    ## # A tibble: 2 × 4
+    ##   gamified exp_group_c gamified_first_c model_fit
+    ##   <lgl>          <dbl>            <dbl>     <dbl>
+    ## 1 FALSE              0                0     0.346
+    ## 2 TRUE               0                0     0.367
+
+Points group versus progress bar group:
+
+``` r
+d_model_fit <- crossing(
+  gamified = TRUE, 
+  exp_group_c = sort(unique(d_jol_m$exp_group_c)),
+  gamified_first_c = 0
+)
+
+d_model_fit$model_fit <- predict(m_jol,
+                                 newdata = d_model_fit,
+                                 re.form = NA, 
+                                 type = "response")
+
+d_model_fit
+```
+
+    ## # A tibble: 2 × 4
+    ##   gamified exp_group_c gamified_first_c model_fit
+    ##   <lgl>          <dbl>            <dbl>     <dbl>
+    ## 1 TRUE          -0.476                0     0.383
+    ## 2 TRUE           0.524                0     0.348
+
+### Visualise fitted model
+
+``` r
+p_jol_m <- plot_model_fit(m_jol, d_jol_m, y_lab = "Judgement of learning") |
+    scale_y_continuous(limits = c(.25, .45), labels = scales::percent_format())
+```
+
+    ##   block    condition gamified gamified_first exp_group gamified_first_c
+    ## 1     1      Control    FALSE          FALSE      both       -0.5421687
+    ## 2     1      Control    FALSE          FALSE     score       -0.5421687
+    ## 3     1       Points     TRUE           TRUE     score        0.4578313
+    ## 4     1 Progress bar     TRUE           TRUE      both        0.4578313
+    ## 5     2      Control    FALSE           TRUE      both        0.4578313
+    ## 6     2      Control    FALSE           TRUE     score        0.4578313
+    ## 7     2       Points     TRUE          FALSE     score       -0.5421687
+    ## 8     2 Progress bar     TRUE          FALSE      both       -0.5421687
+    ##   exp_group_c  pred_val     exp_order     type
+    ## 1   0.5240964 0.3386111  Control—Both  Control
+    ## 2  -0.4759036 0.4020000 Control—Score  Control
+    ## 3  -0.4759036 0.3714894 Score—Control Gamified
+    ## 4   0.5240964 0.3420930  Both—Control Gamified
+    ## 5   0.5240964 0.2986047  Both—Control  Control
+    ## 6  -0.4759036 0.3461702 Score—Control  Control
+    ## 7  -0.4759036 0.3975000 Control—Score Gamified
+    ## 8   0.5240964 0.3552778  Control—Both Gamified
+
+    ## Scale for y is already present.
+    ## Adding another scale for y, which will replace the existing scale.
+
+``` r
+p_jol_m
+```
+
+![](04_analyse_survey_files/figure-gfm/unnamed-chunk-51-1.png)<!-- -->
+
+## Conclusion
+
+- Judgements of learning were higher in the gamified conditions than in
+  the control condition, but not significantly different between the
+  points and progress bar condition.
 
 # Session info
 
