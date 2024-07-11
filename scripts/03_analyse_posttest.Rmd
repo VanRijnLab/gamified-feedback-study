@@ -1,0 +1,245 @@
+---
+title: "Analysis: posttest" 
+subtitle: "Gamified Feedback in Adaptive Retrieval Practice"
+author: "Maarten van der Velde & Gesa van den Broek"
+date: "Last updated: `r Sys.Date()`"
+output:
+  html_notebook:
+    smart: no
+    toc: yes
+    toc_float: yes
+  github_document:
+    toc: yes
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+# Setup
+
+```{r}
+library(here)
+library(dplyr)
+library(ggplot2)
+library(scales)
+library(patchwork)
+library(stringr)
+library(tidyr)
+library(lme4)
+library(lmerTest)
+```
+
+Helper functions for plots and tables:
+```{r}
+source(here("scripts", "00_visualisation_functions.R"))
+```
+
+Load processed data:
+```{r}
+d_test <- readRDS(here("data", "processed", "d_test.rds"))
+```
+
+```{r}
+add_experiment_cols <- function (data) {
+  data |>
+    mutate(exp_order = case_when(
+      gamified_first == 0 & exp_group == "score" ~ "Control—Score",
+      gamified_first == 0 & exp_group == "both" ~ "Control—Both",
+      gamified_first == 1 & exp_group == "score" ~ "Score—Control",
+      gamified_first == 1 & exp_group == "both" ~ "Both—Control"
+    )) |>
+    mutate(type = ifelse(gamified, "Gamified", "Control"))
+}
+```
+
+
+# Does gamification change learning outcomes on the test?
+
+## Accuracy 
+
+### Prepare data
+```{r}
+d_test_acc <- d_test |>
+  group_by(subject, exp_group, block, condition, gamified, gamified_first) |>
+  summarise(accuracy = mean(correct))
+
+d_test_acc_agg <- d_test_acc |>
+  group_by(block, condition, gamified, gamified_first, exp_group) |>
+  summarise(acc = mean(accuracy, na.rm = T),
+            acc_se = sd(accuracy, na.rm = T)/sqrt(n())) |>
+  ungroup() |>
+  add_experiment_cols()
+```
+
+### Visualise data
+
+```{r}
+p_test_acc <- plot_data(d_test_acc_agg, acc, acc_se, "Accuracy") +
+  scale_y_continuous(limits = c(.35, .6), labels = scales::percent_format())
+
+p_test_acc
+```
+
+
+### Fit model
+
+Prepare data for modelling by mean-centering categorical predictors:
+```{r}
+d_test_m <- d_test |>
+  mutate(exp_group_c = ifelse(exp_group == "score", 0, 1),
+         exp_group_c = exp_group_c - mean(exp_group_c),
+         gamified_first_c = gamified_first - mean(gamified_first))
+```
+
+
+```{r}
+m_test_acc <- glmer(correct ~ gamified +
+                       gamified:exp_group_c +
+                       gamified:gamified_first_c +
+                       gamified:gamified_first_c:exp_group_c +
+                       (1 | subject) + (1 | fact),
+                     family = "binomial",
+                     data = d_test_m)
+
+summary(m_test_acc)
+print_model_table(m_test_acc)
+```
+
+
+### Visualise fitted model
+
+```{r}
+p_test_acc_m <- plot_model_fit(m_test_acc, d_test_m, y_lab = "Accuracy") +
+  scale_y_continuous(limits = c(.35, .6), labels = scales::percent_format(accuracy = .1))
+
+p_test_acc_m
+```
+
+
+## Response time
+
+Response time on correct answers only.
+
+### Prepare data
+
+To keep the visualisation of average response times by condition simple, we calculate the median RT per participant, and then take the mean and SD of these medians (which are themselves roughly normally distributed).
+```{r}
+d_test_rt <- d_test |>
+  filter(correct) |>
+  mutate(rt = rt / 1000) |>
+  group_by(subject, exp_group, block, condition, gamified, gamified_first) |>
+  summarise(rt_median = median(rt, na.rm = TRUE))
+
+d_test_rt_agg <- d_test_rt |>
+  group_by(block, condition, gamified, gamified_first, exp_group) |>
+  summarise(rt_mean = mean(rt_median, na.rm = T),
+            rt_se = sd(rt_median, na.rm = T)/sqrt(n())) |>
+  ungroup() |>
+  add_experiment_cols()
+```
+
+### Visualise data
+
+```{r}
+p_test_rt <- plot_data(d_test_rt_agg, rt_mean, rt_se, "Response time (s)") +
+  scale_y_continuous(limits = c(3, 6), labels = scales::comma_format())
+
+p_test_rt
+```
+
+
+### Fit model
+
+Since RT data is not normally distributed, we fit a lognormal model to the response times. 
+(See https://bbolker.github.io/mixedmodels-misc/glmmFAQ.html#gamma-glmms .)
+Prepare data for modelling by mean-centering categorical predictors:
+```{r}
+d_test_rt_m <- d_test |>
+  filter(correct) |>
+  mutate(log_rt = log(rt / 1000)) |>
+  mutate(exp_group_c = ifelse(exp_group == "score", 0, 1),
+         exp_group_c = exp_group_c - mean(exp_group_c),
+         gamified_first_c = gamified_first - mean(gamified_first))
+```
+
+
+```{r}
+m_test_rt <- lmer(log_rt ~ gamified +
+                      gamified:exp_group_c +
+                      gamified:gamified_first_c +
+                      gamified:gamified_first_c:exp_group_c +
+                      (1 | subject) + (1 | fact),
+                    data = d_test_rt_m)
+
+summary(m_test_rt)
+print_model_table(m_test_rt)
+```
+
+
+### Fitted values
+```{r}
+d_model_fit <- crossing(
+  gamified = TRUE, 
+  exp_group_c = 0, 
+  gamified_first_c = sort(unique(d_test_rt_m$gamified_first_c))
+)
+
+d_model_fit$model_fit <- predict(m_test_rt,
+                                 newdata = d_model_fit,
+                                 re.form = NA, 
+                                 type = "response") |>
+  exp() # Transform logRT to RT
+
+d_model_fit
+```
+
+```{r}
+d_model_fit <- crossing(
+  gamified = FALSE, 
+  exp_group_c = sort(unique(d_test_rt_m$exp_group_c)), 
+  gamified_first_c = sort(unique(d_test_rt_m$gamified_first_c))
+)
+
+d_model_fit$model_fit <- predict(m_test_rt,
+                                 newdata = d_model_fit,
+                                 re.form = NA, 
+                                 type = "response") |>
+  exp() # Transform logRT to RT
+
+d_model_fit
+```
+
+
+### Visualise fitted model
+
+```{r}
+p_test_rt_m <- plot_model_fit(m_test_rt, d_test_rt_m, exp_trans = TRUE, y_lab = "Response time (s)") +
+  scale_y_continuous(limits = c(3, 6), labels = scales::comma_format())
+
+p_test_rt_m
+```
+
+
+## Conclusions
+
+-	Gamified feedback had no effect on response accuracy on the test.
+-	For items studied with gamified feedback, response times on the test were faster when items had been practiced in Block 2 than in Block 1.
+-	In the Control condition, the difference in RT between the two experimental groups (Points vs Progress bar) changed significantly between blocks.
+
+
+
+## Combined plot
+
+```{r}
+(p_test_acc | p_test_rt) +
+  plot_layout(guides = "collect") +
+  plot_annotation(tag_levels = "a")
+
+ggsave(here("output", "test_performance.png"), width = 8, height = 3)
+```
+
+
+# Session info
+```{r}
+sessionInfo()
+```

@@ -1,0 +1,521 @@
+---
+title: "Analysis: learning session" 
+subtitle: "Gamified Feedback in Adaptive Retrieval Practice"
+author: "Maarten van der Velde & Gesa van den Broek"
+date: "Last updated: `r Sys.Date()`"
+output:
+  html_notebook:
+    smart: no
+    toc: yes
+    toc_float: yes
+  github_document:
+    toc: yes
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+# Setup
+
+```{r}
+library(here)
+library(dplyr)
+library(ggplot2)
+library(scales)
+library(patchwork)
+library(stringr)
+library(tidyr)
+library(lme4)
+library(lmerTest)
+```
+
+Helper functions for plots and tables:
+```{r}
+source(here("scripts", "00_visualisation_functions.R"))
+```
+
+Load processed data:
+```{r}
+d_learn <- readRDS(here("data", "processed", "d_learn.rds"))
+```
+
+```{r}
+add_experiment_cols <- function (data) {
+  data |>
+    mutate(exp_order = case_when(
+      gamified_first == 0 & exp_group == "score" ~ "Control—Score",
+      gamified_first == 0 & exp_group == "both" ~ "Control—Both",
+      gamified_first == 1 & exp_group == "score" ~ "Score—Control",
+      gamified_first == 1 & exp_group == "both" ~ "Both—Control"
+    )) |>
+    mutate(type = ifelse(gamified, "Gamified", "Control"))
+}
+```
+
+
+# Does gamification change performance during practice?
+
+## Accuracy
+
+### Prepare data
+```{r}
+d_learn_acc <- d_learn |>
+  filter(!study_trial) |>
+  group_by(subject, exp_group, block, condition, gamified, gamified_first) |>
+  summarise(accuracy = mean(correct))
+
+d_learn_acc_agg <- d_learn_acc |>
+  group_by(block, condition, gamified, gamified_first, exp_group) |>
+  summarise(acc = mean(accuracy, na.rm = T),
+            acc_se = sd(accuracy, na.rm = T)/sqrt(n())) |>
+  ungroup() |>
+  add_experiment_cols()
+```
+
+### Visualise data
+
+```{r}
+p_learn_acc <- plot_data(d_learn_acc_agg, acc, acc_se, "Accuracy") +
+  scale_y_continuous(limits = c(.725, .875), labels = scales::percent_format())
+
+p_learn_acc
+```
+
+### Fit model
+
+Prepare data for modelling by mean-centering categorical predictors:
+```{r}
+d_learn_m <- d_learn |>
+  filter(!study_trial) |>
+  mutate(exp_group_c = ifelse(exp_group == "score", 0, 1),
+         exp_group_c = exp_group_c - mean(exp_group_c),
+         gamified_first_c = gamified_first - mean(gamified_first))
+```
+
+```{r}
+m_learn_acc <- glmer(correct ~ gamified +
+                       gamified:exp_group_c +
+                       gamified:gamified_first_c +
+                       gamified:gamified_first_c:exp_group_c +
+                       (1 | subject) + (1 | fact),
+                     family = "binomial",
+                     data = d_learn_m)
+
+summary(m_learn_acc)
+print_model_table(m_learn_acc)
+```
+
+
+### Fitted values
+
+```{r}
+d_model_fit <- crossing(
+  gamified = FALSE, 
+  exp_group_c = sort(unique(d_learn_m$exp_group_c)), 
+  gamified_first_c = 0
+)
+
+d_model_fit$model_fit <- predict(m_learn_acc,
+                                 newdata = d_model_fit,
+                                 re.form = NA, 
+                                 type = "response")
+
+d_model_fit
+```
+
+
+
+### Visualise fitted model
+
+```{r}
+p_learn_acc_m <- plot_model_fit(m_learn_acc, d_learn_m, y_lab = "Accuracy") +
+  scale_y_continuous(limits = c(.75, .90), labels = scales::percent_format(accuracy = .1))
+
+p_learn_acc_m
+```
+
+## Response time
+
+Response time on correct answers only.
+
+### Prepare data
+
+To keep the visualisation of average response times by condition simple, we calculate the median RT per participant, and then take the mean and SD of these medians (which are themselves roughly normally distributed).
+```{r}
+d_learn_rt <- d_learn |>
+  filter(!study_trial) |>
+  filter(correct) |>
+  mutate(rt = rt / 1000) |>
+  group_by(subject, exp_group, block, condition, gamified, gamified_first) |>
+  summarise(rt_median = median(rt, na.rm = TRUE))
+
+d_learn_rt_agg <- d_learn_rt |>
+  group_by(block, condition, gamified, gamified_first, exp_group) |>
+  summarise(rt_mean = mean(rt_median, na.rm = T),
+            rt_se = sd(rt_median, na.rm = T)/sqrt(n())) |>
+  ungroup() |>
+  add_experiment_cols()
+```
+
+### Visualise data
+
+```{r}
+p_learn_rt <- plot_data(d_learn_rt_agg, rt_mean, rt_se, "Response time (s)") +
+  scale_y_continuous(limits = c(1.3, 1.8), labels = scales::comma_format())
+
+p_learn_rt
+```
+
+
+### Fit model
+
+Since RT data is not normally distributed, we fit a lognormal model to the response times. 
+(See https://bbolker.github.io/mixedmodels-misc/glmmFAQ.html#gamma-glmms .)
+Prepare data for modelling by mean-centering categorical predictors:
+```{r}
+d_learn_rt_m <- d_learn |>
+  filter(!study_trial) |>
+  filter(correct) |>
+  mutate(log_rt = log(rt / 1000)) |>
+  mutate(exp_group_c = ifelse(exp_group == "score", 0, 1),
+         exp_group_c = exp_group_c - mean(exp_group_c),
+         gamified_first_c = gamified_first - mean(gamified_first)
+         )
+```
+
+
+```{r}
+m_learn_rt <- lmer(log_rt ~ gamified +
+                      gamified:exp_group_c +
+                      gamified:gamified_first_c +
+                      gamified:gamified_first_c:exp_group_c +
+                      (1 | subject) + (1 | fact),
+                    data = d_learn_rt_m)
+
+summary(m_learn_rt)
+print_model_table(m_learn_rt)
+```
+
+
+### Fitted values
+```{r}
+d_model_fit <- crossing(
+  gamified = c(FALSE, TRUE), 
+  exp_group_c = 0, 
+  gamified_first_c = 0
+)
+
+d_model_fit$model_fit <- predict(m_learn_rt,
+                                 newdata = d_model_fit,
+                                 re.form = NA, 
+                                 type = "response") |>
+  exp() # Transform logRT to RT
+
+d_model_fit
+```
+
+```{r}
+d_model_fit <- crossing(
+  gamified = c(FALSE, TRUE), 
+  exp_group_c = 0, 
+  gamified_first_c = sort(unique(d_learn_rt_m$gamified_first_c))
+)
+
+d_model_fit$model_fit <- predict(m_learn_rt,
+                                 newdata = d_model_fit,
+                                 re.form = NA, 
+                                 type = "response") |>
+  exp() # Transform logRT to RT
+
+d_model_fit
+```
+
+### Visualise fitted model
+
+```{r}
+p_learn_rt_m <- plot_model_fit(m_learn_rt, d_learn_rt_m, exp_trans = TRUE, y_lab = "Response time (s)") +
+  scale_y_continuous(limits = c(1.4, 1.9), labels = scales::comma_format())
+
+p_learn_rt_m
+```
+
+## Total score
+
+The total score is the number of points after the last trial in a block.
+
+### Prepare data
+```{r}
+d_learn_score <- d_learn |>
+  group_by(subject, exp_group, block, condition, gamified, gamified_first) |>
+  slice(n())
+
+d_learn_score_agg <- d_learn_score |>
+  group_by(block, condition, gamified, gamified_first, exp_group) |>
+  summarise(feedback_score_mean = mean(feedback_score, na.rm = T),
+            feedback_score_se = sd(feedback_score, na.rm = T)/sqrt(n())) |>
+  ungroup() |>
+  add_experiment_cols()
+```
+
+### Visualise data
+
+```{r}
+p_learn_score <- plot_data(d_learn_score_agg, feedback_score_mean, feedback_score_se, "Total score") +
+  scale_y_continuous(limits = c(1000, 1400), labels = scales::comma_format())
+
+p_learn_score
+```
+
+
+Distribution of scores:
+```{r}
+p_learn_score_dist <- ggplot(d_learn_score, aes(x = feedback_score, fill = condition)) +
+  facet_grid(condition ~ .) +
+  geom_histogram(aes(y=..density..), colour = "black", binwidth = 100) +
+  geom_density(alpha = .5) +
+  geom_vline(xintercept = c(1200, 1500), lty = 2) +
+  scale_fill_manual(values = col_condition) +
+  scale_colour_manual(values = col_condition) +
+  guides(fill = "none",
+         colour = "none") +
+  labs(x = "Total score",
+       y = "Density") +
+  theme_paper
+
+p_learn_score_dist
+```
+
+
+### Fit model
+
+Prepare data for modelling by mean-centering categorical predictors:
+```{r}
+d_learn_score_m <- d_learn_score |>
+  ungroup() |>
+  mutate(exp_group_c = ifelse(exp_group == "score", 0, 1),
+         exp_group_c = exp_group_c - mean(exp_group_c),
+         gamified_first_c = gamified_first - mean(gamified_first))
+```
+
+
+```{r}
+m_learn_score <- lmer(feedback_score ~ gamified +
+                       gamified:exp_group_c +
+                       gamified:gamified_first_c +
+                       gamified:gamified_first_c:exp_group_c +
+                       (1 | subject),
+                     data = d_learn_score_m)
+
+summary(m_learn_score)
+print_model_table(m_learn_score)
+```
+
+
+### Fitted values
+
+```{r}
+d_model_fit <- crossing(
+  gamified = TRUE, 
+  exp_group_c = 0,
+  gamified_first_c = sort(unique(d_learn_score_m$gamified_first_c))
+)
+
+d_model_fit$model_fit <- predict(m_learn_score,
+                                 newdata = d_model_fit,
+                                 re.form = NA, 
+                                 type = "response")
+
+d_model_fit
+```
+
+
+### Visualise fitted model
+```{r}
+p_learn_score_m <- plot_model_fit(m_learn_score, d_learn_score_m, y_lab = "Total score") +
+  scale_y_continuous(limits = c(1000, 1500))
+
+p_learn_score_m
+```
+
+## Number of words practiced
+
+### Prepare data
+```{r}
+d_learn_words <- d_learn |>
+  group_by(subject, exp_group, block, condition, gamified, gamified_first) |>
+  summarise(words_seen = n_distinct(fact))
+
+d_learn_words_agg <- d_learn_words |>
+  group_by(block, condition, gamified, gamified_first, exp_group) |>
+  summarise(words_mean = mean(words_seen, na.rm = T),
+            words_se = sd(words_seen, na.rm = T)/sqrt(n())) |>
+  ungroup() |>
+  add_experiment_cols()
+```
+
+### Visualise data
+
+```{r}
+p_learn_words <- plot_data(d_learn_words_agg, words_mean, words_se, "Words practiced") +
+  scale_y_continuous(limits = c(20, 30))
+
+p_learn_words
+```
+
+
+### Fit model
+
+Prepare data for modelling by mean-centering categorical predictors:
+```{r}
+d_learn_words_m <- d_learn_words |>
+  ungroup() |>
+  mutate(exp_group_c = ifelse(exp_group == "score", 0, 1),
+         exp_group_c = exp_group_c - mean(exp_group_c),
+         gamified_first_c = gamified_first - mean(gamified_first))
+```
+
+
+```{r}
+m_learn_words <- lmer(words_seen ~ gamified +
+                       gamified:exp_group_c +
+                       gamified:gamified_first_c +
+                       gamified:gamified_first_c:exp_group_c +
+                       (1 | subject),
+                     data = d_learn_words_m)
+
+summary(m_learn_words)
+print_model_table(m_learn_words)
+```
+
+
+### Fitted values
+```{r}
+d_model_fit <- crossing(
+  gamified = TRUE, 
+  exp_group_c = 0,
+  gamified_first_c = sort(unique(d_learn_words_m$gamified_first_c))
+)
+
+d_model_fit$model_fit <- predict(m_learn_words,
+                                 newdata = d_model_fit,
+                                 re.form = NA, 
+                                 type = "response")
+
+d_model_fit
+```
+
+
+### Visualise fitted model
+```{r}
+p_learn_words_m <- plot_model_fit(m_learn_words, d_learn_words_m, y_lab = "Words practiced") +
+  scale_y_continuous(limits = c(20, 30))
+
+p_learn_words_m
+```
+
+## Completed trials
+
+### Prepare data
+```{r}
+d_learn_trials <- d_learn |>
+  group_by(subject, exp_group, block, condition, gamified, gamified_first) |>
+  summarise(n_trials = n())
+
+d_learn_trials_agg <- d_learn_trials |>
+  group_by(block, condition, gamified, gamified_first, exp_group) |>
+  summarise(trials_mean = mean(n_trials, na.rm = T),
+            trials_se = sd(n_trials, na.rm = T)/sqrt(n())) |>
+  ungroup() |>
+  add_experiment_cols()
+```
+
+### Visualise data
+
+```{r}
+p_learn_trials <- plot_data(d_learn_trials_agg, trials_mean, trials_se, "Completed trials") +
+  scale_y_continuous(limits = c(130, 170))
+
+p_learn_trials
+```
+
+
+
+### Fit model
+
+Prepare data for modelling by mean-centering categorical predictors:
+```{r}
+d_learn_trials_m <- d_learn_trials |>
+  ungroup() |>
+  mutate(exp_group_c = ifelse(exp_group == "score", 0, 1),
+         exp_group_c = exp_group_c - mean(exp_group_c),
+         gamified_first_c = gamified_first - mean(gamified_first))
+```
+
+
+```{r}
+m_learn_trials <- lmer(n_trials ~ gamified +
+                       gamified:exp_group_c +
+                       gamified:gamified_first_c +
+                       gamified:gamified_first_c:exp_group_c +
+                       (1 | subject),
+                     data = d_learn_trials_m)
+
+summary(m_learn_trials)
+print_model_table(m_learn_trials)
+```
+
+
+### Fitted values
+```{r}
+d_model_fit <- crossing(
+  gamified = TRUE, 
+  exp_group_c = 0,
+  gamified_first_c = sort(unique(d_learn_trials_m$gamified_first_c))
+)
+
+d_model_fit$model_fit <- predict(m_learn_trials,
+                                 newdata = d_model_fit,
+                                 re.form = NA, 
+                                 type = "response")
+
+d_model_fit
+```
+
+
+### Visualise fitted model
+```{r}
+p_learn_trials_m <- plot_model_fit(m_learn_trials, d_learn_trials_m, y_lab = "Trials completed") +
+  scale_y_continuous(limits = c(130, 170))
+
+p_learn_trials_m
+```
+
+## Conclusions
+
+-	Gamified feedback had no effect on response accuracy during practice. Response accuracy was slightly higher in the Control condition for participants in the Points group than for participants in the Progress bar group, possibly due to group differences in spite of random assignment.
+-	Correct responses were slower during practice with gamified feedback than in the control condition, particularly so in Block 1.
+-	There were no overall effects of the gamification manipulation on total score, number of words practiced, or number of trials completed. However, in the gamified conditions, these outcomes were all better in Block 2 than in Block 1.
+
+
+## Combined plot
+```{r}
+((p_learn_acc | p_learn_rt) / (p_learn_trials | p_learn_words | p_learn_score)) +
+  plot_layout(guides = "collect") +
+  plot_annotation(tag_levels = "a")
+
+ggsave(here("output", "practice_performance_all.png"), width = 6, height = 5)
+```
+
+Streamlined version:
+```{r}
+(p_learn_acc | p_learn_rt | p_learn_score) +
+  plot_layout(guides = "collect") +
+  plot_annotation(tag_levels = "a")
+
+ggsave(here("output", "practice_performance.png"), width = 8, height = 3)
+```
+
+# Session info
+```{r}
+sessionInfo()
+```
