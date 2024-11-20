@@ -25,13 +25,13 @@ col_condition <- c("#e69f00", # Control
 
 plot_data <- function (d, y_mean, y_se, y_lab) {
   
-  dodge_width <- .1
+  dodge_width <- .25
   
   y_mean <- enquo(y_mean)
   y_se <- enquo(y_se)
   
   p <- ggplot(d, aes(x = block, y = !!y_mean, group = exp_order)) +
-    geom_line(aes(lty = exp_order), position = position_dodge(width = dodge_width)) +
+    geom_line(aes(lty = gamified_first), position = position_dodge(width = dodge_width), lwd = .4) +
     geom_errorbar(aes(ymin = !!y_mean - !!y_se, ymax = !!y_mean + !!y_se, colour = condition),
                   width = 0,
                   alpha = .5,
@@ -40,11 +40,12 @@ plot_data <- function (d, y_mean, y_se, y_lab) {
                size = 2,
                position = position_dodge(width = dodge_width)) +
     scale_colour_manual(values = col_condition) +
-    guides(lty = "none") +
+    scale_linetype_manual(values = c(1, 2), labels = c("Control first", "Gamified first")) +
     labs(x = "Block",
          y = y_lab,
          colour = "Condition",
-         pch = "Condition") +
+         pch = "Condition",
+         lty = "Order") +
     theme_paper
   
   p
@@ -97,8 +98,8 @@ print_model_table <- function(m) {
   data.table::setDT(m_coef, keep.rownames = TRUE)
   m_coef$rn <- c("Intercept (Control)",
                  "Gamification",
-                 "Type of gamification on Control (Progress bar - Points)",
-                 "Type of gamification (Progress bar - Points)",
+                 "Type of gamification on Control (Points-and-progress - Points)",
+                 "Type of gamification (Points-and-progress - Points)",
                  "Block on Control (2 - 1)",
                  "Block on gamification (1 - 2)",
                  "Type of gamification on Control; block difference (Block 2 - Block 1)",

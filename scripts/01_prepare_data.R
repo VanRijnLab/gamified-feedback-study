@@ -9,8 +9,8 @@ library(forcats)
 add_condition_labels <- function (data) {
   condition_labels <- tibble(condition = c("control", "score", "both"),
                              condition_label = factor(
-                               c("Control", "Points", "Progress bar"),
-                               levels = c("Control", "Points", "Progress bar")
+                               c("Control", "Points", "Points-and-progress"),
+                               levels = c("Control", "Points", "Points-and-progress")
                              )
   )
   

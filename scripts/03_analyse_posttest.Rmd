@@ -14,6 +14,10 @@ editor_options:
   chunk_output_type: inline
 ---
 
+```{r setup, include = FALSE}
+# Remove to disable caching
+knitr::opts_chunk$set(cache = TRUE)
+```
 
 # Setup
 
@@ -27,6 +31,11 @@ library(stringr)
 library(tidyr)
 library(lme4)
 library(lmerTest)
+library(brms)
+
+# Set up parallel processing for Bayesian models
+library(future)
+plan(multisession, workers = 4)
 ```
 
 Helper functions for plots and tables:
@@ -52,6 +61,29 @@ add_experiment_cols <- function (data) {
 }
 ```
 
+Helper function for interpreting Bayes factors:
+```{r}
+bf_to_strength <- function (bf) {
+  
+  direction <- "for"
+  
+  if (bf < 1) {
+    bf <- 1/bf
+    direction <- "against"
+  }
+  
+  strength <- case_when(
+    bf == 1 ~ "No",
+    bf < 3 ~ "Anecdotal",
+    bf < 10 ~ "Moderate",
+    bf < 30 ~ "Strong",
+    bf < 100 ~ "Very strong",
+    TRUE ~ "Extreme"
+  )
+  
+  paste0(strength, " evidence ", direction)
+}
+```
 
 # Does gamification change learning outcomes on the test?
 
@@ -106,6 +138,7 @@ print_model_table(m_test_acc)
 ```
 
 
+
 ### Visualise fitted model
 
 ```{r}
@@ -114,6 +147,68 @@ p_test_acc_m <- plot_model_fit(m_test_acc, d_test_m, y_lab = "Accuracy") +
 
 p_test_acc_m
 ```
+
+### Bayesian regression model
+
+Fit again with `brms` so that we can calculate Bayes Factors.
+Because we expect any fixed effects to be at most moderate in size, we will use a weakly informative Normal(0, 1) prior for these effects.
+```{r}
+m_test_acc_brms <- brm(correct ~ gamified +
+                         gamified:exp_group_c +
+                         gamified:gamified_first_c +
+                         gamified:gamified_first_c:exp_group_c +
+                         (1 | subject) + (1 | fact),
+                       family = "bernoulli",
+                       data = d_test_m,
+                       prior = set_prior("normal(0, 1)", class = "b"),
+                       chains = 4,
+                       iter = 11000,
+                       warmup = 1000,
+                       sample_prior = TRUE,
+                       future = TRUE,
+                       seed = 0)
+
+summary(m_test_acc_brms)
+```
+
+Inspect the posterior sample distributions of the fixed effects:
+```{r, fig.height = 12, fig.width = 8}
+plot(m_test_acc_brms, nvariables = 8, variable = "^b_", regex = TRUE)
+```
+
+#### Bayes factors
+
+Do a hypothesis test for all fixed-effect coefficients (both main effects and interactions) in the model being equal to zero.
+The column `Evid.Ratio` shows the Bayes Factor in favour of the null hypothesis ($BF_{01}$).
+```{r}
+h_test_acc <- hypothesis(m_test_acc_brms,
+                         c("gamifiedTRUE = 0",
+                           "gamifiedFALSE:exp_group_c = 0",
+                           "gamifiedTRUE:exp_group_c = 0",
+                           "gamifiedFALSE:gamified_first_c = 0",
+                           "gamifiedTRUE:gamified_first_c = 0",
+                           "gamifiedFALSE:exp_group_c:gamified_first_c = 0",
+                           "gamifiedTRUE:exp_group_c:gamified_first_c = 0"),
+                         class = "b")
+
+h_test_acc$hypothesis |>
+  mutate(BF10 = 1 / Evid.Ratio,
+         evidence_for_null = sapply(Evid.Ratio, bf_to_strength))
+```
+
+This hypothesis test is calculating the Savage-Dickey density ratio at zero, which is a ratio of the posterior density at zero relative to the prior density at zero (indicated by dashed vertical line).
+Values above 1 indicate a stronger belief that the effect is indeed zero after having observed the data.  
+```{r, fig.height = 12, fig.width = 6}
+sd_ratio_acc <- plot(h_test_acc, nvariables = 8, variable = "^b_", regex = TRUE, plot = FALSE)
+
+sd_ratio_acc[[1]] +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey25")
+```
+
+#### Conclusion
+
+The Bayesian model finds anecdotal to strong evidence in favour of the null hypothesis (no effect on posttest accuracy) for each of the regression coefficients.
+
 
 
 ## Response time
@@ -219,12 +314,109 @@ p_test_rt_m <- plot_model_fit(m_test_rt, d_test_rt_m, exp_trans = TRUE, y_lab = 
 p_test_rt_m
 ```
 
+### Bayesian regression model
+
+Fit again with `brms` so that we can calculate Bayes Factors.
+Because we expect any fixed effects to be at most moderate in size, we will use a weakly informative Normal(0, 1) prior for these effects.
+```{r}
+m_test_rt_brms <- brm(log_rt ~ gamified +
+                         gamified:exp_group_c +
+                         gamified:gamified_first_c +
+                         gamified:gamified_first_c:exp_group_c +
+                         (1 | subject) + (1 | fact),
+                       family = "gaussian",
+                       data = d_test_rt_m,
+                       prior = set_prior("normal(0, .1)", class = "b"),
+                       chains = 4,
+                       iter = 11000,
+                       warmup = 1000,
+                       sample_prior = TRUE,
+                       future = TRUE,
+                       seed = 0)
+
+summary(m_test_rt_brms)
+```
+
+Inspect the posterior sample distributions of the fixed effects:
+```{r, fig.height = 12, fig.width = 8}
+plot(m_test_rt_brms, nvariables = 8, variable = "^b_", regex = TRUE)
+```
+
+
+#### Bayes factors
+
+Do a hypothesis test for all fixed-effect coefficients (both main effects and interactions) in the model being equal to zero.
+The column `Evid.Ratio` shows the Bayes Factor in favour of the null hypothesis ($BF_{01}$).
+```{r}
+h_test_rt <- hypothesis(m_test_rt_brms,
+                         c("gamifiedTRUE = 0",
+                           "gamifiedFALSE:exp_group_c = 0",
+                           "gamifiedTRUE:exp_group_c = 0",
+                           "gamifiedFALSE:gamified_first_c = 0",
+                           "gamifiedTRUE:gamified_first_c = 0",
+                           "gamifiedFALSE:exp_group_c:gamified_first_c = 0",
+                           "gamifiedTRUE:exp_group_c:gamified_first_c = 0"),
+                         class = "b")
+
+
+h_test_rt$hypothesis |>
+  mutate(BF10 = 1 / Evid.Ratio,
+         evidence_for_null = sapply(Evid.Ratio, bf_to_strength))
+```
+
+This hypothesis test is calculating the Savage-Dickey density ratio at zero, which is a ratio of the posterior density at zero relative to the prior density at zero (indicated by dashed vertical line).
+Values above 1 indicate a stronger belief that the effect is indeed zero after having observed the data.  
+```{r, fig.height = 12, fig.width = 6}
+sd_ratio_rt <- plot(h_test_rt, nvariables = 8, variable = "^b_", regex = TRUE, plot = FALSE)
+
+sd_ratio_rt[[1]] +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey25")
+```
+
+#### Conclusion
+
+The Bayesian model finds evidence in favour of the null hypothesis (no effect on posttest accuracy) for all but two of the regression coefficients.
+There is moderate evidence for an order effect on the gamified conditions, as well as weak anecdotal evidence in favour of an indirect order effect of gamification type in the control condition (`(gamifiedFALSE:exp_group_c:gamified_first_c)`).
+
+
+### Fitted values
+```{r}
+d_model_fit <- crossing(
+  gamified = TRUE, 
+  exp_group_c = 0, 
+  gamified_first_c = sort(unique(d_test_rt_m$gamified_first_c))
+)
+
+d_model_fit$model_fit <- predict(m_test_rt_brms,
+                                 newdata = d_model_fit,
+                                 re_formula = NA)[,1] |>
+  exp() # Transform logRT to RT
+
+d_model_fit
+```
+
+
+
+
+```{r}
+d_model_fit <- crossing(
+  gamified = FALSE, 
+  exp_group_c = sort(unique(d_test_rt_m$exp_group_c)), 
+  gamified_first_c = sort(unique(d_test_rt_m$gamified_first_c))
+)
+
+d_model_fit$model_fit <- predict(m_test_rt_brms,
+                                 newdata = d_model_fit,
+                                 re_formula = NA)[,1] |>
+  exp() # Transform logRT to RT
+
+d_model_fit
+```
 
 ## Conclusions
 
 -	Gamified feedback had no effect on response accuracy on the test.
--	For items studied with gamified feedback, response times on the test were faster when items had been practiced in Block 2 than in Block 1.
--	In the Control condition, the difference in RT between the two experimental groups (Points vs Progress bar) changed significantly between blocks.
+- Gamified feedback had no effect on response time on correct answers on the test. One exception: there was anecdotal evidence that, in the Control condition, the difference in RT between the two experimental groups (Points vs Progress bar) changed between blocks.
 
 
 
@@ -235,9 +427,14 @@ p_test_rt_m
   plot_layout(guides = "collect") +
   plot_annotation(tag_levels = "a")
 
-ggsave(here("output", "test_performance.png"), width = 8, height = 3)
+ggsave(here("output", "test_performance.png"), width = 7.5, height = 3)
 ```
 
+# Save hypothesis testing output for visualisation
+```{r}
+fwrite(h_test_acc$hypothesis, here("output", "hypothesis_tests", "h_test_acc.csv"))
+fwrite(h_test_rt$hypothesis, here("output", "hypothesis_tests", "h_test_rt.csv"))
+```
 
 # Session info
 ```{r}

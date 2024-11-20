@@ -14,6 +14,20 @@ editor_options:
   chunk_output_type: inline
 ---
 
+```{r setup, include = FALSE}
+# Remove to disable caching
+knitr::opts_chunk$set(cache = TRUE)
+```
+
+# Overview
+
+This notebook analyses the survey data collected in the study.
+After each practice block, participants were asked about task-motivational outcomes (feelings of competence, enjoyment, task value), goal setting behaviour (experienced goal setting, trying to perform well), potential negative effects (stress, distraction), perceived relevance of the form of gamified feedback they encountered in the practice block, and were asked to give a judgement of learning.
+After the last practice block, participants also indicated their preferred feedback type from the types they had encountered during practice.
+
+This notebook analyses the effects of gamification on these outcomes.
+We use mixed-effects regression models with the same set of theoretically-motivated predictors across all analyses.
+We report both a frequentist (using `lme4` and `lmerTest`) and a Bayesian (using `brms`) analysis for each outcome.
 
 # Setup
 
@@ -27,6 +41,12 @@ library(stringr)
 library(tidyr)
 library(lme4)
 library(lmerTest)
+library(brms)
+library(BayesFactor)
+
+# Set up parallel processing for Bayesian models
+library(future)
+plan(multisession, workers = 4)
 ```
 
 Helper functions for plots and tables:
@@ -52,9 +72,34 @@ add_experiment_cols <- function (data) {
 }
 ```
 
+Helper function for interpreting Bayes factors:
+```{r}
+bf_to_strength <- function (bf) {
+  
+  direction <- "for"
+  
+  if (bf < 1) {
+    bf <- 1/bf
+    direction <- "against"
+  }
+  
+  strength <- case_when(
+    bf == 1 ~ "No",
+    bf < 3 ~ "Anecdotal",
+    bf < 10 ~ "Moderate",
+    bf < 30 ~ "Strong",
+    bf < 100 ~ "Very strong",
+    TRUE ~ "Extreme"
+  )
+  
+  paste0(strength, " evidence ", direction)
+}
+```
+
+
 # Does gamification change task-motivational outcomes?
 
-Relevant variables: Feelings of competence, Enjoyment, task value, and task preference.
+Relevant variables: feelings of competence, enjoyment, task value.
 
 Prepare data
 
@@ -86,7 +131,7 @@ p_motivation <- d_survey_agg |>
   filter(category == "motivation") |>
   ggplot(aes(x = block, y = response_mean, group = interaction(exp_order, question))) +
   facet_grid(~ question, labeller = labeller(question = str_to_title)) +
-  geom_line(aes(lty = exp_order), position = position_dodge(width = dodge_width)) +
+  geom_line(aes(lty = gamified_first), position = position_dodge(width = dodge_width), lwd = .4) +
   geom_errorbar(aes(ymin = response_mean - response_se, ymax = response_mean + response_se, colour = condition),
                 width = 0,
                 alpha = .5,
@@ -96,21 +141,22 @@ p_motivation <- d_survey_agg |>
              position = position_dodge(width = dodge_width)) +
   scale_y_continuous(breaks = 1:7) +
   scale_colour_manual(values = col_condition) +
-  guides(lty = "none") +
+  scale_linetype_manual(values = c(1, 2), labels = c("Control first", "Gamified first")) +
   labs(x = "Block",
        y = "Response",
        colour = "Condition",
-       pch = "Condition") +
+       pch = "Condition",
+       lty = "Order") +
   theme_paper
 
 p_motivation
-ggsave(p_motivation, filename = here("output", "survey_motivation.png"), width = 8, height = 3)
+ggsave(p_motivation, filename = here("output", "survey_motivation.png"), width = 7.5, height = 3)
 ```
 
 
 ## Competence
 
-### Fit model
+### Fit frequentist model
 
 ```{r}
 m_competence <- lmer(response ~ gamified +
@@ -124,7 +170,7 @@ summary(m_competence)
 print_model_table(m_competence)
 ```
 
-### Fitted values
+#### Fitted values
 
 ```{r}
 d_model_fit <- crossing(
@@ -142,7 +188,7 @@ d_model_fit
 ```
 
 
-### Visualise fitted model
+#### Visualise fitted model
 
 ```{r}
 p_competence_m <- plot_model_fit(m_competence, filter(d_survey_m, question == "competence"), y_lab = "Competence") +
@@ -150,10 +196,83 @@ p_competence_m <- plot_model_fit(m_competence, filter(d_survey_m, question == "c
 
 p_competence_m
 ```
+### Fit Bayesian model
+
+```{r}
+m_competence_bayes <- brm(response ~ gamified +
+                            gamified:exp_group_c +
+                            gamified:gamified_first_c +
+                            gamified:gamified_first_c:exp_group_c +
+                            (1 | subject),
+                          data = filter(d_survey_m, question == "competence"),
+                          prior = set_prior("normal(0, 1)", class = "b"),
+                          chains = 4,
+                          iter = 11000,
+                          warmup = 1000,
+                          sample_prior = TRUE,
+                          future = TRUE,
+                          seed = 0)
+
+summary(m_competence_bayes)
+```
+Inspect the posterior sample distributions of the fixed effects:
+```{r, fig.height = 12, fig.width = 8}
+plot(m_competence_bayes, nvariables = 8, variable = "^b_", regex = TRUE)
+```
+#### Bayes factors
+
+Do a hypothesis test for all fixed-effect coefficients (both main effects and interactions) in the model being equal to zero.
+The column `Evid.Ratio` shows the Bayes Factor in favour of the null hypothesis ($BF_{01}$).
+```{r}
+h_test_competence <- hypothesis(m_competence_bayes,
+                                c("gamifiedTRUE = 0",
+                                  "gamifiedFALSE:exp_group_c = 0",
+                                  "gamifiedTRUE:exp_group_c = 0",
+                                  "gamifiedFALSE:gamified_first_c = 0",
+                                  "gamifiedTRUE:gamified_first_c = 0",
+                                  "gamifiedFALSE:exp_group_c:gamified_first_c = 0",
+                                  "gamifiedTRUE:exp_group_c:gamified_first_c = 0"),
+                                class = "b")
+
+h_test_competence$hypothesis |>
+  mutate(BF10 = 1 / Evid.Ratio,
+         evidence_for_null = sapply(Evid.Ratio, bf_to_strength))
+```
+
+This hypothesis test is calculating the Savage-Dickey density ratio at zero, which is a ratio of the posterior density at zero relative to the prior density at zero (indicated by dashed vertical line).
+Values above 1 indicate a stronger belief that the effect is indeed zero after having observed the data.
+See Wagenmakers et al. (2010) for details on this test, and https://mvuorre.github.io/posts/2017-03-21-bayes-factors-with-brms/ for a reference on doing this with `brms`.
+
+
+```{r, fig.height = 12, fig.width = 6}
+sd_ratio_competence <- plot(h_test_competence, nvariables = 8, variable = "^b_", regex = TRUE, plot = FALSE)
+
+sd_ratio_competence[[1]] +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey25")
+```
+
+#### Fitted values
+
+```{r}
+d_model_fit <- crossing(
+  gamified = c(TRUE, FALSE), 
+  exp_group_c = 0,
+  gamified_first_c = 0
+)
+
+d_model_fit$model_fit <- predict(m_competence_bayes,
+                                 newdata = d_model_fit,
+                                 re_formula = NA,
+                                 type = "response")[,1]
+
+d_model_fit
+```
+
+
 
 ## Enjoyment
 
-### Fit model 
+### Fit frequentist model 
 ```{r}
 m_enjoyment <- lmer(response ~ gamified +
                       gamified:exp_group_c +
@@ -166,7 +285,7 @@ summary(m_enjoyment)
 print_model_table(m_enjoyment)
 ```
 
-### Fitted values
+#### Fitted values
 ```{r}
 d_model_fit <- crossing(
   gamified = c(TRUE, FALSE), 
@@ -212,7 +331,7 @@ d_model_fit$model_fit <- predict(m_enjoyment,
 d_model_fit
 ```
 
-### Visualise fitted model
+#### Visualise fitted model
 
 ```{r}
 p_enjoyment_m <- plot_model_fit(m_enjoyment, filter(d_survey_m, question == "enjoyment"), y_lab = "Enjoyment") +
@@ -221,9 +340,113 @@ p_enjoyment_m <- plot_model_fit(m_enjoyment, filter(d_survey_m, question == "enj
 p_enjoyment_m
 ```
 
+### Fit Bayesian model
+
+```{r}
+m_enjoyment_bayes <- brm(response ~ gamified +
+                           gamified:exp_group_c +
+                           gamified:gamified_first_c +
+                           gamified:gamified_first_c:exp_group_c +
+                           (1 | subject),
+                         data = filter(d_survey_m, question == "enjoyment"),
+                         prior = set_prior("normal(0, 1)", class = "b"),
+                         chains = 4,
+                         iter = 11000,
+                         warmup = 1000,
+                         sample_prior = TRUE,
+                         future = TRUE,
+                         seed = 0)
+
+summary(m_enjoyment_bayes)
+```
+
+Inspect the posterior sample distributions of the fixed effects:
+```{r, fig.height = 12, fig.width = 8}
+plot(m_enjoyment_bayes, nvariables = 8, variable = "^b_", regex = TRUE)
+```
+
+#### Bayes factors
+
+Do a hypothesis test for all fixed-effect coefficients (both main effects and interactions) in the model being equal to zero.
+The column `Evid.Ratio` shows the Bayes Factor in favour of the null hypothesis ($BF_{01}$).
+```{r}
+h_test_enjoyment <- hypothesis(m_enjoyment_bayes,
+                               c("gamifiedTRUE = 0",
+                                 "gamifiedFALSE:exp_group_c = 0",
+                                 "gamifiedTRUE:exp_group_c = 0",
+                                 "gamifiedFALSE:gamified_first_c = 0",
+                                 "gamifiedTRUE:gamified_first_c = 0",
+                                 "gamifiedFALSE:exp_group_c:gamified_first_c = 0",
+                                 "gamifiedTRUE:exp_group_c:gamified_first_c = 0"),
+                               class = "b")
+
+h_test_enjoyment$hypothesis |>
+  mutate(BF10 = 1 / Evid.Ratio,
+         evidence_for_null = sapply(Evid.Ratio, bf_to_strength))
+```
+
+This hypothesis test is calculating the Savage-Dickey density ratio at zero, which is a ratio of the posterior density at zero relative to the prior density at zero (indicated by dashed vertical line).
+Values above 1 indicate a stronger belief that the effect is indeed zero after having observed the data.
+
+
+
+```{r, fig.height = 12, fig.width = 6}
+sd_ratio_enjoyment <- plot(h_test_enjoyment, nvariables = 8, variable = "^b_", regex = TRUE, plot = FALSE)
+
+sd_ratio_enjoyment[[1]] +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey25")
+```
+
+#### Fitted values
+```{r}
+d_model_fit <- crossing(
+  gamified = c(TRUE, FALSE), 
+  exp_group_c = 0,
+  gamified_first_c = 0
+)
+
+d_model_fit$model_fit <- predict(m_enjoyment_bayes,,
+                                 newdata = d_model_fit,
+                                 re_formula = NA, 
+                                 type = "response")[,1]
+
+d_model_fit
+```
+
+```{r}
+d_model_fit <- crossing(
+  gamified = FALSE, 
+  exp_group_c = 0,
+  gamified_first_c = sort(unique(d_survey_m$gamified_first_c))
+)
+
+d_model_fit$model_fit <- predict(m_enjoyment_bayes,
+                                 newdata = d_model_fit,
+                                 re_formula = NA,
+                                 type = "response")[,1]
+
+d_model_fit
+```
+
+```{r}
+d_model_fit <- crossing(
+  gamified = FALSE, 
+  exp_group_c = sort(unique(d_survey_m$exp_group_c)),
+  gamified_first_c = sort(unique(d_survey_m$gamified_first_c))
+)
+
+d_model_fit$model_fit <- predict(m_enjoyment_bayes,
+                                 newdata = d_model_fit,
+                                 re_formula = NA,
+                                 type = "response")[,1]
+
+d_model_fit
+```
+
+
 ## Perceived Task Value
 
-### Fit model
+### Fit frequentist model
 
 ```{r}
 m_value <- lmer(response ~ gamified +
@@ -237,7 +460,7 @@ summary(m_value)
 print_model_table(m_value)
 ```
 
-### Fitted values
+#### Fitted values
 
 overall difference in reported task value between gamified and non-gamified conditions...
 ```{r}
@@ -302,7 +525,7 @@ d_model_fit$model_fit <- predict(m_value,
 d_model_fit
 ```
 
-### Visualise fitted model
+#### Visualise fitted model
 
 ```{r}
 p_value_m <- plot_model_fit(m_value, filter(d_survey_m, question == "value"), y_lab = "Value") +
@@ -310,13 +533,125 @@ p_value_m <- plot_model_fit(m_value, filter(d_survey_m, question == "value"), y_
 
 p_value_m
 ```
+### Fit Bayesian model
+
+```{r}
+m_value_bayes <- brm(response ~ gamified +
+                       gamified:exp_group_c +
+                       gamified:gamified_first_c +
+                       gamified:gamified_first_c:exp_group_c +
+                       (1 | subject),
+                     data = filter(d_survey_m, question == "value"),
+                     prior = set_prior("normal(0, 1)", class = "b"),
+                     chains = 4,
+                     iter = 11000,
+                     warmup = 1000,
+                     sample_prior = TRUE,
+                     future = TRUE,
+                     seed = 0)
+
+summary(m_value_bayes)
+```
+Inspect the posterior sample distributions of the fixed effects:
+```{r, fig.height = 12, fig.width = 8}
+plot(m_value_bayes, nvariables = 8, variable = "^b_", regex = TRUE)
+```
+#### Bayes factors
+
+Do a hypothesis test for all fixed-effect coefficients (both main effects and interactions) in the model being equal to zero.
+The column `Evid.Ratio` shows the Bayes Factor in favour of the null hypothesis ($BF_{01}$).
+```{r}
+h_test_value <- hypothesis(m_value_bayes,
+                           c("gamifiedTRUE = 0",
+                             "gamifiedFALSE:exp_group_c = 0",
+                             "gamifiedTRUE:exp_group_c = 0",
+                             "gamifiedFALSE:gamified_first_c = 0",
+                             "gamifiedTRUE:gamified_first_c = 0",
+                             "gamifiedFALSE:exp_group_c:gamified_first_c = 0",
+                             "gamifiedTRUE:exp_group_c:gamified_first_c = 0"),
+                           class = "b")
+
+h_test_value$hypothesis |>
+    mutate(BF10 = 1 / Evid.Ratio,
+         evidence_for_null = sapply(Evid.Ratio, bf_to_strength))
+```
+
+This hypothesis test is calculating the Savage-Dickey density ratio at zero, which is a ratio of the posterior density at zero relative to the prior density at zero (indicated by dashed vertical line).
+Values above 1 indicate a stronger belief that the effect is indeed zero after having observed the data.
 
 
+```{r, fig.height = 12, fig.width = 6}
+sd_ratio_value <- plot(h_test_value, nvariables = 8, variable = "^b_", regex = TRUE, plot = FALSE)
 
+sd_ratio_value[[1]] +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey25")
+```
+
+#### Fitted values
+
+```{r}
+d_model_fit <- crossing(
+  gamified = c(TRUE, FALSE), 
+  exp_group_c = 0,
+  gamified_first_c = 0
+)
+
+d_model_fit$model_fit <- predict(m_value_bayes,,
+                                 newdata = d_model_fit,
+                                 re_formula = NA,
+                                 type = "response")[,1]
+
+d_model_fit
+```
+
+```{r}
+d_model_fit <- crossing(
+  gamified = FALSE, 
+  exp_group_c = sort(unique(d_survey_m$exp_group_c)),
+  gamified_first_c = 0
+)
+
+d_model_fit$model_fit <- predict(m_value_bayes,
+                                 newdata = d_model_fit,
+                                 re_formula = NA,
+                                 type = "response")[,1]
+
+d_model_fit
+```
+
+```{r}
+d_model_fit <- crossing(
+  gamified = FALSE, 
+  exp_group_c = 0,
+  gamified_first_c = sort(unique(d_survey_m$gamified_first_c))
+)
+
+d_model_fit$model_fit <- predict(m_value_bayes,,
+                                 newdata = d_model_fit,
+                                 re_formula = NA,
+                                 type = "response")[,1]
+
+d_model_fit
+```
+
+```{r}
+d_model_fit <- crossing(
+  gamified = FALSE, 
+  exp_group_c = sort(unique(d_survey_m$exp_group_c)),
+  gamified_first_c = sort(unique(d_survey_m$gamified_first_c))
+)
+
+d_model_fit$model_fit <- predict(m_value,
+                                 newdata = d_model_fit,
+                                 re.form = NA, 
+                                 type = "response")
+
+d_model_fit
+```
 ## Conclusion
 
--	All three aspects of task motivation (experienced competence, enjoyment, task value) were rated higher in the gamified conditions than in the control condition, but not significantly different between the points and progress bar condition.
--	There was also an indirect effect of the manipulation in that the control condition was rated lower when presented after gamified practice than before gamified practice: both enjoyment and perceived task value were significantly worse if the control condition was presented after the gamified condition, and this effect was more pronounced when the control condition was done after the progress bar condition than after the points condition.
+-	All three aspects of task motivation (experienced competence, enjoyment, task value) were rated higher in the gamified conditions than in the control condition, but no different between the points and progress bar condition.
+-	There was also an indirect effect of the manipulation in that the control condition was rated lower when presented after gamified practice than before gamified practice: both enjoyment and perceived task value were worse if the control condition was presented after the gamified condition, and this effect was more pronounced when the control condition was done after the progress bar condition than after the points condition.
 
 
 
@@ -357,7 +692,7 @@ ggsave(p_perception, file = here("output", "survey_perception.png"), width = 8, 
 
 ## Goalsetting 
 
-### Fit model
+### Fit frequentist model
 
 ```{r}
 m_goalsetting <- lmer(response ~ gamified +
@@ -371,7 +706,7 @@ summary(m_goalsetting)
 print_model_table(m_goalsetting)
 ```
 
-### Fitted values
+#### Fitted values
 
 Gamified versus control:
 ```{r}
@@ -439,7 +774,7 @@ d_model_fit
 ```
 
 
-### Visualise fitted model
+#### Visualise fitted model
 
 ```{r}
 p_goalsetting_m <- plot_model_fit(m_goalsetting, filter(d_survey_m, question == "goalsetting"), y_lab = "Goal use") +
@@ -447,10 +782,128 @@ p_goalsetting_m <- plot_model_fit(m_goalsetting, filter(d_survey_m, question == 
 
 p_goalsetting_m
 ```
+### Fit Bayesian model
+
+```{r}
+m_goalsetting_bayes <- brm(response ~ gamified +
+                             gamified:exp_group_c +
+                             gamified:gamified_first_c +
+                             gamified:gamified_first_c:exp_group_c +
+                             (1 | subject),
+                           data = filter(d_survey_m, question == "goalsetting"),
+                           prior = set_prior("normal(0, 1)", class = "b"),
+                           chains = 4,
+                           iter = 11000,
+                           warmup = 1000,
+                           sample_prior = TRUE,
+                           future = TRUE,
+                           seed = 0)
+
+summary(m_goalsetting_bayes)
+```
+Inspect the posterior sample distributions of the fixed effects:
+```{r, fig.height = 12, fig.width = 8}
+plot(m_goalsetting_bayes, nvariables = 8, variable = "^b_", regex = TRUE)
+```
+#### Bayes factors
+
+Do a hypothesis test for all fixed-effect coefficients (both main effects and interactions) in the model being equal to zero.
+The column `Evid.Ratio` shows the Bayes Factor in favour of the null hypothesis ($BF_{01}$).
+```{r}
+h_test_goalsetting <- hypothesis(m_goalsetting_bayes,
+                                 c("gamifiedTRUE = 0",
+                                   "gamifiedFALSE:exp_group_c = 0",
+                                   "gamifiedTRUE:exp_group_c = 0",
+                                   "gamifiedFALSE:gamified_first_c = 0",
+                                   "gamifiedTRUE:gamified_first_c = 0",
+                                   "gamifiedFALSE:exp_group_c:gamified_first_c = 0",
+                                   "gamifiedTRUE:exp_group_c:gamified_first_c = 0"),
+                                 class = "b")
+
+h_test_goalsetting$hypothesis |>
+  mutate(BF10 = 1 / Evid.Ratio,
+         evidence_for_null = sapply(Evid.Ratio, bf_to_strength))
+```
+
+This hypothesis test is calculating the Savage-Dickey density ratio at zero, which is a ratio of the posterior density at zero relative to the prior density at zero (indicated by dashed vertical line).
+Values above 1 indicate a stronger belief that the effect is indeed zero after having observed the data.
+
+```{r, fig.height = 12, fig.width = 6}
+sd_ratio_goalsetting <- plot(h_test_goalsetting, nvariables = 8, variable = "^b_", regex = TRUE, plot = FALSE)
+
+sd_ratio_goalsetting[[1]] +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey25")
+```
+
+#### Fitted values
+Gamified versus control:
+```{r}
+d_model_fit <- crossing(
+  gamified = sort(unique(d_survey_m$gamified)), 
+  exp_group_c = 0,
+  gamified_first_c = 0
+)
+
+d_model_fit$model_fit <- predict(m_goalsetting_bayes,
+                                 newdata = d_model_fit,
+                                 re_formula = NA,
+                                 type = "response")[,1]
+
+d_model_fit
+```
+
+Points group versus progress bar group:
+```{r}
+d_model_fit <- crossing(
+  gamified = TRUE, 
+  exp_group_c = sort(unique(d_survey_m$exp_group_c)),
+  gamified_first_c = 0
+)
+
+d_model_fit$model_fit <- predict(m_goalsetting_bayes,,
+                                 newdata = d_model_fit,
+                                 re_formula = NA,
+                                 type = "response")[,1]
+
+d_model_fit
+```
+
+Control condition: gamified first vs. gamified second:
+```{r}
+d_model_fit <- crossing(
+  gamified = FALSE, 
+  exp_group_c = 0,
+  gamified_first_c = sort(unique(d_survey_m$gamified_first_c))
+)
+
+d_model_fit$model_fit <- predict(m_goalsetting_bayes,
+                                 newdata = d_model_fit,
+                                 re_formula = NA,
+                                 type = "response")[,1]
+
+d_model_fit
+
+```
+
+Control condition in progress bar group vs. points group:
+```{r}
+d_model_fit <- crossing(
+  gamified = FALSE, 
+  exp_group_c = sort(unique(d_survey_m$exp_group_c)),
+  gamified_first_c = 0
+)
+
+d_model_fit$model_fit <- predict(m_goalsetting_bayes,
+                                 newdata = d_model_fit,
+                                 re_formula = NA,
+                                 type = "response")[,1]
+
+d_model_fit
+```
 
 ## Wanting to perform well
 
-### Fit model
+### Fit frequentist model
 
 ```{r}
 m_performwell <- lmer(response ~ gamified +
@@ -465,7 +918,7 @@ print_model_table(m_performwell)
 ```
 
 
-### Fitted values
+#### Fitted values
 Gamified versus control:
 ```{r}
 d_model_fit <- crossing(
@@ -533,7 +986,7 @@ d_model_fit
 ```
 
 
-### Visualise fitted model
+#### Visualise fitted model
 
 ```{r}
 p_performwell_m <- plot_model_fit(m_performwell, filter(d_survey_m, question == "performwell"), y_lab = "Wanting to perform well") +
@@ -541,11 +994,130 @@ p_performwell_m <- plot_model_fit(m_performwell, filter(d_survey_m, question == 
 
 p_performwell_m
 ```
+### Fit Bayesian model
+
+```{r}
+m_performwell_bayes <- brm(response ~ gamified +
+                             gamified:exp_group_c +
+                             gamified:gamified_first_c +
+                             gamified:gamified_first_c:exp_group_c +
+                             (1 | subject),
+                           data = filter(d_survey_m, question == "performwell"),
+                           prior = set_prior("normal(0, 1)", class = "b"),
+                           chains = 4,
+                           iter = 11000,
+                           warmup = 1000,
+                           sample_prior = TRUE,
+                           future = TRUE,
+                           seed = 0)
+
+summary(m_performwell_bayes)
+```
+Inspect the posterior sample distributions of the fixed effects:
+```{r, fig.height = 12, fig.width = 8}
+plot(m_performwell_bayes, nvariables = 8, variable = "^b_", regex = TRUE)
+```
+#### Bayes factors
+
+Do a hypothesis test for all fixed-effect coefficients (both main effects and interactions) in the model being equal to zero.
+The column `Evid.Ratio` shows the Bayes Factor in favour of the null hypothesis ($BF_{01}$).
+```{r}
+h_test_performwell <- hypothesis(m_performwell_bayes,
+                                 c("gamifiedTRUE = 0",
+                                   "gamifiedFALSE:exp_group_c = 0",
+                                   "gamifiedTRUE:exp_group_c = 0",
+                                   "gamifiedFALSE:gamified_first_c = 0",
+                                   "gamifiedTRUE:gamified_first_c = 0",
+                                   "gamifiedFALSE:exp_group_c:gamified_first_c = 0",
+                                   "gamifiedTRUE:exp_group_c:gamified_first_c = 0"),
+                                 class = "b")
+
+h_test_performwell$hypothesis |>
+  mutate(BF10 = 1 / Evid.Ratio,
+         evidence_for_null = sapply(Evid.Ratio, bf_to_strength))
+```
+
+This hypothesis test is calculating the Savage-Dickey density ratio at zero, which is a ratio of the posterior density at zero relative to the prior density at zero (indicated by dashed vertical line).
+Values above 1 indicate a stronger belief that the effect is indeed zero after having observed the data.
+
+
+```{r, fig.height = 12, fig.width = 6}
+sd_ratio_performwell <- plot(h_test_performwell, nvariables = 8, variable = "^b_", regex = TRUE, plot = FALSE)
+
+sd_ratio_performwell[[1]] +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey25")
+```
+
+#### Fitted values
+Gamified versus control:
+```{r}
+d_model_fit <- crossing(
+  gamified = sort(unique(d_survey_m$gamified)), 
+  exp_group_c = 0,
+  gamified_first_c = 0
+)
+
+d_model_fit$model_fit <- predict(m_performwell_bayes,
+                                 newdata = d_model_fit,
+                                 re_formula = NA,
+                                 type = "response")[,1]
+
+d_model_fit
+```
+
+Points group versus progress bar group:
+```{r}
+d_model_fit <- crossing(
+  gamified = TRUE, 
+  exp_group_c = sort(unique(d_survey_m$exp_group_c)),
+  gamified_first_c = 0
+)
+
+d_model_fit$model_fit <- predict(m_performwell_bayes,
+                                 newdata = d_model_fit,
+                                 re_formula = NA,
+                                 type = "response")[,1]
+
+d_model_fit
+```
+
+Control condition: gamified first vs. gamified second:
+```{r}
+d_model_fit <- crossing(
+  gamified = FALSE, 
+  exp_group_c = 0,
+  gamified_first_c = sort(unique(d_survey_m$gamified_first_c))
+)
+
+d_model_fit$model_fit <- predict(m_performwell_bayes,
+                                 newdata = d_model_fit,
+                                 re_formula = NA, 
+                                 type = "response")[,1]
+
+d_model_fit
+```
+
+Control condition in progress bar group vs. points group:
+```{r}
+d_model_fit <- crossing(
+  gamified = FALSE, 
+  exp_group_c = sort(unique(d_survey_m$exp_group_c)),
+  gamified_first_c = 0
+)
+
+d_model_fit$model_fit <- predict(m_performwell_bayes,
+                                 newdata = d_model_fit,
+                                 re_formula = NA,
+                                 type = "response")[,1]
+
+d_model_fit
+```
+
 
 ## Conclusion
--	The two aspects of goal setting (feeling like working towards a goal, trying to perform well) were rated higher in the gamified conditions than the control condition
-- Learners felt more like they were working towards a goal with progress bar feedback than with points. 
--	There were also indirect effects: Learners felt less like working towards a goal and tried less to perform well in the control condition when they had started with gamified practice and/or when in the progress bar group
+-	The two aspects of goal setting (feeling like working towards a goal, trying to perform well) were rated higher in the gamified conditions than the control condition.
+- Learners felt more like they were working towards a goal with progress bar feedback than with points, though there was no difference in this regard between the two gamified conditions.
+-	There were also indirect effects: Learners felt less like working towards a goal and tried less to perform well in the control condition when they had started with gamified practice and/or when in the progress bar group.
 
 
 # Are there negative effects of gamified feedback on learners' experience?
@@ -553,6 +1125,8 @@ p_performwell_m
 Relevant variables: stress and distraction.
 
 ## Stress
+
+### Fit frequentist model
 
 ```{r}
 m_goalstress <- lmer(response ~ gamified +
@@ -566,7 +1140,7 @@ summary(m_goalstress)
 print_model_table(m_goalstress)
 ```
 
-### Fitted values
+#### Fitted values
 Gamified versus control:
 ```{r}
 d_model_fit <- crossing(
@@ -600,7 +1174,7 @@ d_model_fit$model_fit <- predict(m_goalstress,
 d_model_fit
 ```
 
-### Visualise fitted model
+#### Visualise fitted model
 
 ```{r}
 p_goalstress_m <- plot_model_fit(m_goalstress, filter(d_survey_m, question == "goalstress"), y_lab = "Goal stress") +
@@ -608,9 +1182,98 @@ p_goalstress_m <- plot_model_fit(m_goalstress, filter(d_survey_m, question == "g
 
 p_goalstress_m
 ```
+### Fit Bayesian model
+
+```{r}
+m_goalstress_bayes <- brm(response ~ gamified +
+                            gamified:exp_group_c +
+                            gamified:gamified_first_c +
+                            gamified:gamified_first_c:exp_group_c +
+                            (1 | subject),
+                          data = filter(d_survey_m, question == "goalstress"),
+                          prior = set_prior("normal(0, 1)", class = "b"),
+                          chains = 4,
+                          iter = 11000,
+                          warmup = 1000,
+                          sample_prior = TRUE,
+                          future = TRUE,
+                          seed = 0)
+
+summary(m_goalstress_bayes)
+```
+Inspect the posterior sample distributions of the fixed effects:
+```{r, fig.height = 12, fig.width = 8}
+plot(m_goalstress_bayes, nvariables = 8, variable = "^b_", regex = TRUE)
+```
+#### Bayes factors
+
+Do a hypothesis test for all fixed-effect coefficients (both main effects and interactions) in the model being equal to zero.
+The column `Evid.Ratio` shows the Bayes Factor in favour of the null hypothesis ($BF_{01}$).
+```{r}
+h_test_goalstress <- hypothesis(m_goalstress_bayes,
+                                c("gamifiedTRUE = 0",
+                                  "gamifiedFALSE:exp_group_c = 0",
+                                  "gamifiedTRUE:exp_group_c = 0",
+                                  "gamifiedFALSE:gamified_first_c = 0",
+                                  "gamifiedTRUE:gamified_first_c = 0",
+                                  "gamifiedFALSE:exp_group_c:gamified_first_c = 0",
+                                  "gamifiedTRUE:exp_group_c:gamified_first_c = 0"),
+                                class = "b")
+
+h_test_goalstress$hypothesis |>
+  mutate(BF10 = 1 / Evid.Ratio,
+         evidence_for_null = sapply(Evid.Ratio, bf_to_strength))
+```
+
+This hypothesis test is calculating the Savage-Dickey density ratio at zero, which is a ratio of the posterior density at zero relative to the prior density at zero (indicated by dashed vertical line).
+Values above 1 indicate a stronger belief that the effect is indeed zero after having observed the data.
+
+
+```{r, fig.height = 12, fig.width = 6}
+sd_ratio_goalstress <- plot(h_test_goalstress, nvariables = 8, variable = "^b_", regex = TRUE, plot = FALSE)
+
+sd_ratio_goalstress[[1]] +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey25")
+```
+
+#### Fitted values
+Gamified versus control:
+```{r}
+d_model_fit <- crossing(
+  gamified = sort(unique(d_survey_m$gamified)), 
+  exp_group_c = 0,
+  gamified_first_c = 0
+)
+
+d_model_fit$model_fit <- predict(m_goalstress_bayes,
+                                 newdata = d_model_fit,
+                                 re_formula = NA,
+                                 type = "response")[,1]
+
+d_model_fit
+```
+
+
+Points group versus progress bar group:
+```{r}
+d_model_fit <- crossing(
+  gamified = TRUE, 
+  exp_group_c = sort(unique(d_survey_m$exp_group_c)),
+  gamified_first_c = 0
+)
+
+d_model_fit$model_fit <- predict(m_goalstress_bayes,
+                                 newdata = d_model_fit,
+                                 re_formula = NA,
+                                 type = "response")[,1]
+
+d_model_fit
+```
+
 
 ## Distraction
 
+### Fit frequentist model
 ```{r}
 m_distraction <- lmer(response ~ gamified +
                        gamified:exp_group_c +
@@ -623,7 +1286,7 @@ summary(m_distraction)
 print_model_table(m_distraction)
 ```
 
-### Fitted values
+#### Fitted values
 
 Points versus progress bar condition
 ```{r}
@@ -678,7 +1341,7 @@ d_model_fit
 ```
 
 
-### Visualise fitted model
+#### Visualise fitted model
 
 ```{r}
 p_distraction_m <- plot_model_fit(m_distraction, filter(d_survey_m, question == "distraction"), y_lab = "Distraction") +
@@ -686,10 +1349,115 @@ p_distraction_m <- plot_model_fit(m_distraction, filter(d_survey_m, question == 
 
 p_distraction_m
 ```
+### Fit Bayesian model
+
+```{r}
+m_distraction_bayes <- brm(response ~ gamified +
+                             gamified:exp_group_c +
+                             gamified:gamified_first_c +
+                             gamified:gamified_first_c:exp_group_c +
+                             (1 | subject),
+                           data = filter(d_survey_m, question == "distraction"),
+                           prior = set_prior("normal(0, 1)", class = "b"),
+                           chains = 4,
+                           iter = 11000,
+                           warmup = 1000,
+                           sample_prior = TRUE,
+                           future = TRUE,
+                           seed = 0)
+
+summary(m_distraction_bayes)
+```
+Inspect the posterior sample distributions of the fixed effects:
+```{r, fig.height = 12, fig.width = 8}
+plot(m_distraction_bayes, nvariables = 8, variable = "^b_", regex = TRUE)
+```
+#### Bayes factors
+
+Do a hypothesis test for all fixed-effect coefficients (both main effects and interactions) in the model being equal to zero.
+The column `Evid.Ratio` shows the Bayes Factor in favour of the null hypothesis ($BF_{01}$).
+```{r}
+h_test_distraction <- hypothesis(m_distraction_bayes,
+                                 c("gamifiedTRUE = 0",
+                                   "gamifiedFALSE:exp_group_c = 0",
+                                   "gamifiedTRUE:exp_group_c = 0",
+                                   "gamifiedFALSE:gamified_first_c = 0",
+                                   "gamifiedTRUE:gamified_first_c = 0",
+                                   "gamifiedFALSE:exp_group_c:gamified_first_c = 0",
+                                   "gamifiedTRUE:exp_group_c:gamified_first_c = 0"),
+                                 class = "b")
+
+h_test_distraction$hypothesis |>
+  mutate(BF10 = 1 / Evid.Ratio,
+         evidence_for_null = sapply(Evid.Ratio, bf_to_strength))
+```
+
+This hypothesis test is calculating the Savage-Dickey density ratio at zero, which is a ratio of the posterior density at zero relative to the prior density at zero (indicated by dashed vertical line).
+Values above 1 indicate a stronger belief that the effect is indeed zero after having observed the data.
+
+```{r, fig.height = 12, fig.width = 6}
+sd_ratio_distraction <- plot(h_test_distraction, nvariables = 8, variable = "^b_", regex = TRUE, plot = FALSE)
+
+sd_ratio_distraction[[1]] +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey25")
+```
+
+#### Fitted values
+
+Points versus progress bar condition
+```{r}
+d_model_fit <- crossing(
+  gamified = TRUE, 
+  exp_group_c = sort(unique(d_survey_m$exp_group_c)),
+  gamified_first_c = 0
+)
+
+d_model_fit$model_fit <- predict(m_distraction_bayes,
+                                 newdata = d_model_fit,
+                                 re_formula = NA,
+                                 type = "response")[,1]
+
+d_model_fit
+
+```
+
+Control condition in Block 1 versus Block 2
+```{r}
+d_model_fit <- crossing(
+  gamified = FALSE, 
+  exp_group_c = 0,
+  gamified_first_c = sort(unique(d_survey_m$exp_group_c))
+)
+
+d_model_fit$model_fit <- predict(m_distraction_bayes,
+                                 newdata = d_model_fit,
+                                 re_formula = NA,
+                                 type = "response")[,1]
+
+d_model_fit
+```
+
+
+Gamified conditions in Block 1 versus Block 2
+```{r}
+d_model_fit <- crossing(
+  gamified = TRUE, 
+  exp_group_c = 0,
+  gamified_first_c = sort(unique(d_survey_m$gamified_first_c))
+)
+
+d_model_fit$model_fit <- predict(m_distraction_bayes,
+                                 newdata = d_model_fit,
+                                 re_formula = NA,
+                                 type = "response")[,1]
+
+d_model_fit
+
+```
 
 ## Conclusion
--	Gamified practice was rated as more stressful than the control condition
--	The progress bar condition was rated as more stressful and more distracting than the points condition. (However, ratings were overall relatively low on the 7-point scale, with average values between 2.68 and 4.28). 
+-	Gamified practice was rated as more stressful than the control condition.
+-	The progress bar condition was rated as more stressful and more distracting than the points condition. (However, ratings were overall relatively low on the 7-point scale.
 -	There was also an indirect effect in that the gamified feedback was rated as more distracting (and the timer in the control condition as less distracting) when presented in the second block.  
 
 
@@ -699,6 +1467,7 @@ Relevant variables: perceived relevance of gamification, preference for conditio
 
 ## Perceived Relevance
 
+### Fit frequentist model
 Since perceived relevance was only rated in the gamified conditions, we cannot use the same model as elsewhere.
 Instead we can use a simpler linear regression:
 ```{r}
@@ -710,7 +1479,7 @@ m_relevance <- lm(response ~ exp_group_c +
 summary(m_relevance)
 ```
 
-### Fitted values
+#### Fitted values
 
 ```{r}
 d_model_fit <- crossing(
@@ -726,21 +1495,102 @@ d_model_fit$model_fit <- predict(m_relevance,
 d_model_fit
 ```
 
+### Fit Bayesian model
+
+```{r}
+m_relevance_bayes <- brm(response ~ exp_group_c +
+                           gamified_first_c +
+                           gamified_first_c:exp_group_c,
+                         data = filter(d_survey_m, question == "relevance", gamified == TRUE),
+                         prior = set_prior("normal(0, 1)", class = "b"),
+                         chains = 4,
+                         iter = 11000,
+                         warmup = 1000,
+                         sample_prior = TRUE,
+                         future = TRUE,
+                         seed = 0)
+
+summary(m_relevance_bayes)
+```
+Inspect the posterior sample distributions of the fixed effects:
+```{r, fig.height = 6, fig.width = 8}
+plot(m_relevance_bayes, nvariables = 4, variable = "^b_", regex = TRUE)
+```
+#### Bayes factors
+
+Do a hypothesis test for all fixed-effect coefficients (both main effects and interactions) in the model being equal to zero.
+The column `Evid.Ratio` shows the Bayes Factor in favour of the null hypothesis ($BF_{01}$).
+```{r}
+h_test_relevance <- hypothesis(m_relevance_bayes,
+                                 c("exp_group_c = 0",
+                                   "gamified_first_c = 0",
+                                   "exp_group_c:gamified_first_c = 0"),
+                                 class = "b")
+
+h_test_relevance$hypothesis |>
+  mutate(BF10 = 1 / Evid.Ratio,
+         evidence_for_null = sapply(Evid.Ratio, bf_to_strength))
+```
+
+This hypothesis test is calculating the Savage-Dickey density ratio at zero, which is a ratio of the posterior density at zero relative to the prior density at zero (indicated by dashed vertical line).
+Values above 1 indicate a stronger belief that the effect is indeed zero after having observed the data.
+
+
+```{r, fig.height = 6, fig.width = 6}
+sd_ratio_relevance <- plot(h_test_relevance, nvariables = 4, variable = "^b_", regex = TRUE, plot = FALSE)
+
+sd_ratio_relevance[[1]] +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey25")
+```
+
+#### Fitted values
+
+```{r}
+d_model_fit <- crossing(
+  exp_group_c = sort(unique(d_survey_m$exp_group_c)),
+  gamified_first_c = 0,
+)
+
+d_model_fit$model_fit <- predict(m_relevance_bayes,
+                                 newdata = d_model_fit,
+                                 re_formula = NA,
+                                 type = "response")[,1]
+
+d_model_fit
+```
+
 
 
 ## Preference for Condition
-```{r}
-data_preferences <- d_survey |> filter(preference!="" & condition != "Control") # Exclude two participants who did not respond to this item and keep only one row per participant
-CrossTable_preferences <-  table(data_preferences$exp_group, data_preferences$preference)
-CrossTable_preferences
-prop.table(CrossTable_preferences,1)
 
-summary(table(data_preferences$exp_group, data_preferences$preference))
+Contingency table: what proportion of participants in each condition preferred the gamified practice over the control condition or indicated no preference?
+```{r}
+data_preferences <- d_survey |> 
+  filter(preference!="" & condition != "Control") |> # Exclude two participants who did not respond to this item and keep only one row per participant
+  group_by(exp_group = as.factor(exp_group), subject) |>
+  summarise(preference = as.factor(first(preference)), .groups = "drop")
+
+# Counts
+crosstab_preferences <- xtabs(~exp_group + preference, data = data_preferences)
+crosstab_preferences
+
+# Proportions
+prop.table(crosstab_preferences,1)
+```
+
+### Frequentist Chi-square test
+```{r}
+chisq.test(crosstab_preferences)
+```
+### Bayesian Chi-square test
+```{r}
+bf_preferences <- contingencyTableBF(crosstab_preferences, sampleType = "indepMulti", fixedMargin = "rows")
+1/bf_preferences
 ```
 
 ## Conclusions
 -	Progress bar condition was rated as more relevant than the points condition. 
-- However, participants in the progress bar group did not show a significantly stronger preference for gamified practice over the control condition than participants in the points group.
+- However, participants in the progress bar group did not show a stronger preference for gamified practice over the control condition than participants in the points group.
 
 
 # Does gamification change learners' metacognitive judgements?
@@ -785,7 +1635,7 @@ p_jol
 ggsave(p_jol, filename = here("output", "survey_judgementoflearning.png"), width = 8, height = 3)
 ```
 
-### Fit model
+### Fit frequentist model
 
 ```{r}
 d_jol_m <- d_survey_m |>
@@ -805,7 +1655,7 @@ summary(m_jol)
 print_model_table(m_jol)
 ```
 
-### Fitted values
+#### Fitted values
 Gamified versus control:
 ```{r}
 d_model_fit <- crossing(
@@ -846,10 +1696,75 @@ p_jol_m <- plot_model_fit(m_jol, d_jol_m, y_lab = "Judgement of learning") |
 
 p_jol_m
 ```
+### Fit Bayesian model
+
+```{r}
+m_jol_bayes <- brm(judgement_of_learning ~ gamified +
+                     gamified:exp_group_c +
+                     gamified:gamified_first_c +
+                     gamified:gamified_first_c:exp_group_c +
+                     (1 | subject),
+                   data = d_jol_m,
+                   prior = set_prior("normal(0, 1)", class = "b"),
+                   chains = 4,
+                   iter = 11000,
+                   warmup = 1000,
+                   sample_prior = TRUE,
+                   future = TRUE,
+                   seed = 0)
+
+summary(m_jol_bayes)
+```
+Inspect the posterior sample distributions of the fixed effects:
+```{r, fig.height = 12, fig.width = 8}
+plot(m_jol_bayes, nvariables = 8, variable = "^b_", regex = TRUE)
+```
+#### Bayes factors
+
+Do a hypothesis test for all fixed-effect coefficients (both main effects and interactions) in the model being equal to zero.
+The column `Evid.Ratio` shows the Bayes Factor in favour of the null hypothesis ($BF_{01}$).
+```{r}
+h_test_jol <- hypothesis(m_jol_bayes,
+                         c("gamifiedTRUE = 0",
+                           "gamifiedFALSE:exp_group_c = 0",
+                           "gamifiedTRUE:exp_group_c = 0",
+                           "gamifiedFALSE:gamified_first_c = 0",
+                           "gamifiedTRUE:gamified_first_c = 0",
+                           "gamifiedFALSE:exp_group_c:gamified_first_c = 0",
+                           "gamifiedTRUE:exp_group_c:gamified_first_c = 0"),
+                         class = "b")
+h_test_jol$hypothesis |>
+  mutate(BF10 = 1 / Evid.Ratio,
+         evidence_for_null = sapply(Evid.Ratio, bf_to_strength))
+```
+
+This hypothesis test is calculating the Savage-Dickey density ratio at zero, which is a ratio of the posterior density at zero relative to the prior density at zero (indicated by dashed vertical line).
+Values above 1 indicate a stronger belief that the effect is indeed zero after having observed the data.
+
+```{r, fig.height = 12, fig.width = 6}
+sd_ratio_jol <- plot(h_test_jol, nvariables = 8, variable = "^b_", regex = TRUE, plot = FALSE)
+
+sd_ratio_jol[[1]] +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey25")
+```
 
 ## Conclusion
 
--	Judgements of learning were higher in the gamified conditions than in the control condition, but not significantly different between the points and progress bar condition.
+-	The frequentist analysis finds that judgements of learning were higher in the gamified conditions than in the control condition, but not significantly different between the points and progress bar condition. The Bayesian analysis finds evidence against all effects.
+
+
+# Save hypothesis testing output for visualisation
+```{r}
+fwrite(h_test_competence$hypothesis, here("output", "hypothesis_tests", "h_test_competence.csv"))
+fwrite(h_test_enjoyment$hypothesis, here("output", "hypothesis_tests", "h_test_enjoyment.csv"))
+fwrite(h_test_value$hypothesis, here("output", "hypothesis_tests", "h_test_value.csv"))
+fwrite(h_test_goalsetting$hypothesis, here("output", "hypothesis_tests", "h_test_goalsetting.csv"))
+fwrite(h_test_performwell$hypothesis, here("output", "hypothesis_tests", "h_test_performwell.csv"))
+fwrite(h_test_goalstress$hypothesis, here("output", "hypothesis_tests", "h_test_goalstress.csv"))
+fwrite(h_test_distraction$hypothesis, here("output", "hypothesis_tests", "h_test_distraction.csv"))
+fwrite(h_test_relevance$hypothesis, here("output", "hypothesis_tests", "h_test_relevance.csv"))
+fwrite(h_test_jol$hypothesis, here("output", "hypothesis_tests", "h_test_jol.csv"))
+```
 
 
 # Session info

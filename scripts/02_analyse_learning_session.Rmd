@@ -14,6 +14,10 @@ editor_options:
   chunk_output_type: inline
 ---
 
+```{r setup, include = FALSE}
+# Remove to disable caching
+knitr::opts_chunk$set(cache = TRUE)
+```
 
 # Setup
 
@@ -27,6 +31,11 @@ library(stringr)
 library(tidyr)
 library(lme4)
 library(lmerTest)
+library(brms)
+
+# Set up parallel processing for Bayesian models
+library(future)
+plan(multisession, workers = 4)
 ```
 
 Helper functions for plots and tables:
@@ -52,6 +61,29 @@ add_experiment_cols <- function (data) {
 }
 ```
 
+Helper function for interpreting Bayes factors:
+```{r}
+bf_to_strength <- function (bf) {
+  
+  direction <- "for"
+  
+  if (bf < 1) {
+    bf <- 1/bf
+    direction <- "against"
+  }
+  
+  strength <- case_when(
+    bf == 1 ~ "No",
+    bf < 3 ~ "Anecdotal",
+    bf < 10 ~ "Moderate",
+    bf < 30 ~ "Strong",
+    bf < 100 ~ "Very strong",
+    TRUE ~ "Extreme"
+  )
+  
+  paste0(strength, " evidence ", direction)
+}
+```
 
 # Does gamification change performance during practice?
 
@@ -81,7 +113,7 @@ p_learn_acc <- plot_data(d_learn_acc_agg, acc, acc_se, "Accuracy") +
 p_learn_acc
 ```
 
-### Fit model
+### Fit frequentist model
 
 Prepare data for modelling by mean-centering categorical predictors:
 ```{r}
@@ -106,7 +138,7 @@ print_model_table(m_learn_acc)
 ```
 
 
-### Fitted values
+#### Fitted values
 
 ```{r}
 d_model_fit <- crossing(
@@ -125,7 +157,7 @@ d_model_fit
 
 
 
-### Visualise fitted model
+#### Visualise fitted model
 
 ```{r}
 p_learn_acc_m <- plot_model_fit(m_learn_acc, d_learn_m, y_lab = "Accuracy") +
@@ -133,6 +165,68 @@ p_learn_acc_m <- plot_model_fit(m_learn_acc, d_learn_m, y_lab = "Accuracy") +
 
 p_learn_acc_m
 ```
+### Fit Bayesian model
+
+Fit again with `brms` so that we can calculate Bayes Factors.
+Because we expect any fixed effects to be at most moderate in size, we will use a weakly informative Normal(0, 1) prior for these effects.
+```{r}
+m_learn_acc_brms <- brm(correct ~ gamified +
+                          gamified:exp_group_c +
+                          gamified:gamified_first_c +
+                          gamified:gamified_first_c:exp_group_c +
+                          (1 | subject) + (1 | fact),
+                        family = "bernoulli",
+                        data = d_learn_m,
+                        prior = set_prior("normal(0, 1)", class = "b"),
+                        chains = 4,
+                        iter = 11000,
+                        warmup = 1000,
+                        sample_prior = TRUE,
+                        future = TRUE,
+                        seed = 0)
+
+summary(m_learn_acc_brms)
+```
+
+Inspect the posterior sample distributions of the fixed effects:
+```{r, fig.height = 12, fig.width = 8}
+plot(m_learn_acc_brms, nvariables = 8, variable = "^b_", regex = TRUE)
+```
+
+#### Bayes factors
+
+Do a hypothesis test for all fixed-effect coefficients (both main effects and interactions) in the model being equal to zero.
+The column `Evid.Ratio` shows the Bayes Factor in favour of the null hypothesis ($BF_{01}$).
+```{r}
+h_learn_acc <- hypothesis(m_learn_acc_brms,
+                          c("gamifiedTRUE = 0",
+                            "gamifiedFALSE:exp_group_c = 0",
+                            "gamifiedTRUE:exp_group_c = 0",
+                            "gamifiedFALSE:gamified_first_c = 0",
+                            "gamifiedTRUE:gamified_first_c = 0",
+                            "gamifiedFALSE:exp_group_c:gamified_first_c = 0",
+                            "gamifiedTRUE:exp_group_c:gamified_first_c = 0"),
+                          class = "b")
+
+h_learn_acc$hypothesis |>
+  mutate(BF10 = 1 / Evid.Ratio,
+         evidence_for_null = sapply(Evid.Ratio, bf_to_strength))
+```
+
+This hypothesis test is calculating the Savage-Dickey density ratio at zero, which is a ratio of the posterior density at zero relative to the prior density at zero (indicated by dashed vertical line).
+Values above 1 indicate a stronger belief that the effect is indeed zero after having observed the data.  
+```{r, fig.height = 12, fig.width = 6}
+sd_ratio_acc <- plot(h_learn_acc, nvariables = 8, variable = "^b_", regex = TRUE, plot = FALSE)
+
+sd_ratio_acc[[1]] +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey25")
+```
+
+
+
+#### Conclusion
+
+The Bayesian model finds anecdotal to strong evidence in favour of the null hypothesis (no effect on learning accuracy) for each of the regression coefficients.
 
 ## Response time
 
@@ -167,7 +261,7 @@ p_learn_rt
 ```
 
 
-### Fit model
+### Fit frequentist model
 
 Since RT data is not normally distributed, we fit a lognormal model to the response times. 
 (See https://bbolker.github.io/mixedmodels-misc/glmmFAQ.html#gamma-glmms .)
@@ -197,7 +291,7 @@ print_model_table(m_learn_rt)
 ```
 
 
-### Fitted values
+#### Fitted values
 ```{r}
 d_model_fit <- crossing(
   gamified = c(FALSE, TRUE), 
@@ -238,6 +332,85 @@ p_learn_rt_m <- plot_model_fit(m_learn_rt, d_learn_rt_m, exp_trans = TRUE, y_lab
 
 p_learn_rt_m
 ```
+### Fit Bayesian model
+
+Fit again with `brms` so that we can calculate Bayes Factors.
+Because we expect any fixed effects to be at most moderate in size, we will use a weakly informative Normal(0, .1) prior for these effects.
+```{r}
+m_learn_rt_brms <- brm(log_rt ~ gamified +
+                         gamified:exp_group_c +
+                         gamified:gamified_first_c +
+                         gamified:gamified_first_c:exp_group_c +
+                         (1 | subject) + (1 | fact),
+                       family = "gaussian",
+                       data = d_learn_rt_m,
+                       prior = set_prior("normal(0, .1)", class = "b"),
+                       chains = 4,
+                       iter = 11000,
+                       warmup = 1000,
+                       sample_prior = TRUE,
+                       future = TRUE,
+                       seed = 0)
+
+summary(m_learn_rt_brms)
+```
+
+Inspect the posterior sample distributions of the fixed effects:
+```{r, fig.height = 12, fig.width = 8}
+plot(m_learn_rt_brms, nvariables = 8, variable = "^b_", regex = TRUE)
+```
+
+
+#### Bayes factors
+
+Do a hypothesis learn for all fixed-effect coefficients (both main effects and interactions) in the model being equal to zero.
+The column `Evid.Ratio` shows the Bayes Factor in favour of the null hypothesis ($BF_{01}$).
+```{r}
+h_learn_rt <- hypothesis(m_learn_rt_brms,
+                         c("gamifiedTRUE = 0",
+                           "gamifiedFALSE:exp_group_c = 0",
+                           "gamifiedTRUE:exp_group_c = 0",
+                           "gamifiedFALSE:gamified_first_c = 0",
+                           "gamifiedTRUE:gamified_first_c = 0",
+                           "gamifiedFALSE:exp_group_c:gamified_first_c = 0",
+                           "gamifiedTRUE:exp_group_c:gamified_first_c = 0"),
+                         class = "b")
+
+
+h_learn_rt$hypothesis |>
+  mutate(BF10 = 1 / Evid.Ratio,
+         evidence_for_null = sapply(Evid.Ratio, bf_to_strength))
+```
+
+This hypothesis test is calculating the Savage-Dickey density ratio at zero, which is a ratio of the posterior density at zero relative to the prior density at zero (indicated by dashed vertical line).
+Values above 1 indicate a stronger belief that the effect is indeed zero after having observed the data.  
+```{r, fig.height = 12, fig.width = 6}
+sd_ratio_rt <- plot(h_learn_rt, nvariables = 8, variable = "^b_", regex = TRUE, plot = FALSE)
+
+sd_ratio_rt[[1]] +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey25")
+```
+
+#### Fitted values
+```{r}
+d_model_fit <- crossing(
+  gamified = c(FALSE, TRUE), 
+  exp_group_c = 0, 
+  gamified_first_c = sort(unique(d_learn_rt_m$gamified_first_c))
+)
+
+d_model_fit$model_fit <- predict(m_learn_rt_brms,
+                                 newdata = d_model_fit,
+                                 re_formula = NA,
+                                 type = "response")[,1] |>
+  exp() # Transform logRT to RT
+
+d_model_fit
+```
+
+
+#### Conclusion
+The Bayesian model finds anecdotal to strong evidence in favour of the null hypothesis (no effect on correct RT) for each of the regression coefficients.
 
 ## Total score
 
@@ -283,10 +456,12 @@ p_learn_score_dist <- ggplot(d_learn_score, aes(x = feedback_score, fill = condi
   theme_paper
 
 p_learn_score_dist
+
+ggsave(here("output", "practice_scores.png"), width = 7.5, height = 5)
 ```
 
 
-### Fit model
+### Fit frequentist model
 
 Prepare data for modelling by mean-centering categorical predictors:
 ```{r}
@@ -311,7 +486,7 @@ print_model_table(m_learn_score)
 ```
 
 
-### Fitted values
+#### Fitted values
 
 ```{r}
 d_model_fit <- crossing(
@@ -328,14 +503,83 @@ d_model_fit$model_fit <- predict(m_learn_score,
 d_model_fit
 ```
 
+### Fit Bayesian model
 
-### Visualise fitted model
+Since score is on a much larger scale than other dependent variables, we expect coefficients for  fixed effects to be on a much larger scale too.
+Adjust the prior accordingly:
 ```{r}
-p_learn_score_m <- plot_model_fit(m_learn_score, d_learn_score_m, y_lab = "Total score") +
-  scale_y_continuous(limits = c(1000, 1500))
+m_learn_score_bayes <- brm(feedback_score ~ gamified +
+                             gamified:exp_group_c +
+                             gamified:gamified_first_c +
+                             gamified:gamified_first_c:exp_group_c +
+                             (1 | subject),
+                           family = "gaussian",
+                           data = d_learn_score_m,
+                           prior = set_prior("normal(0, 100)", class = "b"),
+                           chains = 4,
+                           iter = 11000,
+                           warmup = 1000,
+                           sample_prior = TRUE,
+                           future = TRUE,
+                           seed = 0)
 
-p_learn_score_m
+summary(m_learn_score_bayes)
 ```
+
+Inspect the posterior sample distributions of the fixed effects:
+```{r, fig.height = 12, fig.width = 8}
+plot(m_learn_score_bayes, nvariables = 8, variable = "^b_", regex = TRUE)
+```
+
+
+#### Bayes factors
+
+Do a hypothesis learn for all fixed-effect coefficients (both main effects and interactions) in the model being equal to zero.
+The column `Evid.Ratio` shows the Bayes Factor in favour of the null hypothesis ($BF_{01}$).
+```{r}
+h_learn_score <- hypothesis(m_learn_score_bayes,
+                            c("gamifiedTRUE = 0",
+                              "gamifiedFALSE:exp_group_c = 0",
+                              "gamifiedTRUE:exp_group_c = 0",
+                              "gamifiedFALSE:gamified_first_c = 0",
+                              "gamifiedTRUE:gamified_first_c = 0",
+                              "gamifiedFALSE:exp_group_c:gamified_first_c = 0",
+                              "gamifiedTRUE:exp_group_c:gamified_first_c = 0"),
+                            class = "b")
+
+
+h_learn_score$hypothesis |>
+  mutate(BF10 = 1 / Evid.Ratio,
+         evidence_for_null = sapply(Evid.Ratio, bf_to_strength))
+```
+
+This hypothesis test is calculating the Savage-Dickey density ratio at zero, which is a ratio of the posterior density at zero relative to the prior density at zero (indicated by dashed vertical line).
+Values above 1 indicate a stronger belief that the effect is indeed zero after having observed the data.  
+```{r, fig.height = 12, fig.width = 6}
+sd_ratio_score <- plot(h_learn_score, nvariables = 8, variable = "^b_", regex = TRUE, plot = FALSE)
+
+sd_ratio_score[[1]] +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey25")
+```
+
+#### Fitted values
+
+```{r}
+d_model_fit <- crossing(
+  gamified = TRUE, 
+  exp_group_c = 0,
+  gamified_first_c = sort(unique(d_learn_score_m$gamified_first_c))
+)
+
+d_model_fit$model_fit <- predict(m_learn_score_bayes,
+                                 newdata = d_model_fit,
+                                 re_formula = NA,
+                                 type = "response")[,1]
+
+d_model_fit
+```
+
+
 
 ## Number of words practiced
 
@@ -363,7 +607,7 @@ p_learn_words
 ```
 
 
-### Fit model
+### Fit frequentist model
 
 Prepare data for modelling by mean-centering categorical predictors:
 ```{r}
@@ -388,7 +632,7 @@ print_model_table(m_learn_words)
 ```
 
 
-### Fitted values
+#### Fitted values
 ```{r}
 d_model_fit <- crossing(
   gamified = TRUE, 
@@ -405,12 +649,70 @@ d_model_fit
 ```
 
 
-### Visualise fitted model
+#### Visualise fitted model
 ```{r}
 p_learn_words_m <- plot_model_fit(m_learn_words, d_learn_words_m, y_lab = "Words practiced") +
   scale_y_continuous(limits = c(20, 30))
 
 p_learn_words_m
+```
+
+### Fit Bayesian model
+
+As before, we'll adjust the prior to fit the wider range of likely coefficients, given the scale of the dependent variable.
+```{r}
+m_learn_words_bayes <- brm(words_seen ~ gamified +
+                           gamified:exp_group_c +
+                           gamified:gamified_first_c +
+                           gamified:gamified_first_c:exp_group_c +
+                           (1 | subject),
+                         family = "gaussian",
+                         data = d_learn_words_m,
+                         prior = set_prior("normal(0, 3)", class = "b"),
+                         chains = 4,
+                         iter = 11000,
+                         warmup = 1000,
+                         sample_prior = TRUE,
+                         future = TRUE,
+                         seed = 0)
+
+summary(m_learn_words_bayes)
+```
+
+Inspect the posterior sample distributions of the fixed effects:
+```{r, fig.height = 12, fig.width = 8}
+plot(m_learn_words_bayes, nvariables = 8, variable = "^b_", regex = TRUE)
+```
+
+
+#### Bayes factors
+
+Do a hypothesis learn for all fixed-effect coefficients (both main effects and interactions) in the model being equal to zero.
+The column `Evid.Ratio` shows the Bayes Factor in favour of the null hypothesis ($BF_{01}$).
+```{r}
+h_learn_words <- hypothesis(m_learn_words_bayes,
+                            c("gamifiedTRUE = 0",
+                              "gamifiedFALSE:exp_group_c = 0",
+                              "gamifiedTRUE:exp_group_c = 0",
+                              "gamifiedFALSE:gamified_first_c = 0",
+                              "gamifiedTRUE:gamified_first_c = 0",
+                              "gamifiedFALSE:exp_group_c:gamified_first_c = 0",
+                              "gamifiedTRUE:exp_group_c:gamified_first_c = 0"),
+                            class = "b")
+
+
+h_learn_words$hypothesis |>
+  mutate(BF10 = 1 / Evid.Ratio,
+         evidence_for_null = sapply(Evid.Ratio, bf_to_strength))
+```
+
+This hypothesis test is calculating the Savage-Dickey density ratio at zero, which is a ratio of the posterior density at zero relative to the prior density at zero (indicated by dashed vertical line).
+Values above 1 indicate a stronger belief that the effect is indeed zero after having observed the data.  
+```{r, fig.height = 12, fig.width = 6}
+sd_ratio_words <- plot(h_learn_words, nvariables = 8, variable = "^b_", regex = TRUE, plot = FALSE)
+
+sd_ratio_words[[1]] +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey25")
 ```
 
 ## Completed trials
@@ -440,7 +742,7 @@ p_learn_trials
 
 
 
-### Fit model
+### Fit frequentist model
 
 Prepare data for modelling by mean-centering categorical predictors:
 ```{r}
@@ -465,7 +767,7 @@ print_model_table(m_learn_trials)
 ```
 
 
-### Fitted values
+#### Fitted values
 ```{r}
 d_model_fit <- crossing(
   gamified = TRUE, 
@@ -482,13 +784,72 @@ d_model_fit
 ```
 
 
-### Visualise fitted model
+#### Visualise fitted model
 ```{r}
 p_learn_trials_m <- plot_model_fit(m_learn_trials, d_learn_trials_m, y_lab = "Trials completed") +
   scale_y_continuous(limits = c(130, 170))
 
 p_learn_trials_m
 ```
+
+### Fit Bayesian model
+
+```{r}
+m_learn_trials_bayes <- brm(n_trials ~ gamified +
+                           gamified:exp_group_c +
+                           gamified:gamified_first_c +
+                           gamified:gamified_first_c:exp_group_c +
+                           (1 | subject),
+                         family = "gaussian",
+                         data = d_learn_trials_m,
+                         prior = set_prior("normal(0, 10)", class = "b"),
+                         chains = 4,
+                         iter = 11000,
+                         warmup = 1000,
+                         sample_prior = TRUE,
+                         future = TRUE,
+                         seed = 0)
+
+summary(m_learn_trials_bayes)
+```
+
+Inspect the posterior sample distributions of the fixed effects:
+```{r, fig.height = 12, fig.width = 8}
+plot(m_learn_trials_bayes, nvariables = 8, variable = "^b_", regex = TRUE)
+```
+
+
+#### Bayes factors
+
+Do a hypothesis learn for all fixed-effect coefficients (both main effects and interactions) in the model being equal to zero.
+The column `Evid.Ratio` shows the Bayes Factor in favour of the null hypothesis ($BF_{01}$).
+```{r}
+h_learn_trials <- hypothesis(m_learn_trials_bayes,
+                             c("gamifiedTRUE = 0",
+                               "gamifiedFALSE:exp_group_c = 0",
+                               "gamifiedTRUE:exp_group_c = 0",
+                               "gamifiedFALSE:gamified_first_c = 0",
+                               "gamifiedTRUE:gamified_first_c = 0",
+                               "gamifiedFALSE:exp_group_c:gamified_first_c = 0",
+                               "gamifiedTRUE:exp_group_c:gamified_first_c = 0"),
+                             class = "b")
+
+
+h_learn_trials$hypothesis |>
+  mutate(BF10 = 1 / Evid.Ratio,
+         evidence_for_null = sapply(Evid.Ratio, bf_to_strength))
+```
+
+This hypothesis test is calculating the Savage-Dickey density ratio at zero, which is a ratio of the posterior density at zero relative to the prior density at zero (indicated by dashed vertical line).
+Values above 1 indicate a stronger belief that the effect is indeed zero after having observed the data.  
+```{r, fig.height = 12, fig.width = 6}
+sd_ratio_trials <- plot(h_learn_trials, nvariables = 8, variable = "^b_", regex = TRUE, plot = FALSE)
+
+sd_ratio_trials[[1]] +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey25")
+```
+
+
 
 ## Conclusions
 
@@ -503,7 +864,7 @@ p_learn_trials_m
   plot_layout(guides = "collect") +
   plot_annotation(tag_levels = "a")
 
-ggsave(here("output", "practice_performance_all.png"), width = 6, height = 5)
+ggsave(here("output", "practice_performance_all.png"), width = 7.5, height = 5)
 ```
 
 Streamlined version:
@@ -512,7 +873,15 @@ Streamlined version:
   plot_layout(guides = "collect") +
   plot_annotation(tag_levels = "a")
 
-ggsave(here("output", "practice_performance.png"), width = 8, height = 3)
+ggsave(here("output", "practice_performance.png"), width = 7.5, height = 3)
+```
+# Save hypothesis testing output for visualisation
+```{r}
+fwrite(h_learn_acc$hypothesis, here("output", "hypothesis_tests", "h_learn_acc.csv"))
+fwrite(h_learn_rt$hypothesis, here("output", "hypothesis_tests", "h_learn_rt.csv"))
+fwrite(h_learn_score$hypothesis, here("output", "hypothesis_tests", "h_learn_score.csv"))
+fwrite(h_learn_words$hypothesis, here("output", "hypothesis_tests", "h_learn_words.csv"))
+fwrite(h_learn_trials$hypothesis, here("output", "hypothesis_tests", "h_learn_trials.csv"))
 ```
 
 # Session info
